@@ -1,0 +1,36 @@
+{
+  "name": "@geastack/linux",
+  "version": "0.1.0",
+  "description": "Native Linux desktop build targets (SDL2 — Raspberry Pi OS) for GeaStack apps.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/geastack/linux.git"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "targets",
+    "!targets/**/dist/**",
+    "!targets/**/build/**",
+    "!targets/**/test/**",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@geastack/core": "^0.1.23",
+    "@geastack/compiler": "^1.0.15",
+    "@geastack/geatsc-plugin-gea": "^0.1.6"
+  },
+  "scripts": {
+    "test": "for f in $(git ls-files | grep -E '(^|/)(test[-_][^/]*|[^/]*\\.test)\\.mjs$'); do echo \"==> $f\"; node \"$f\" || exit 1; done"
+  }
+}
