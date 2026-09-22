@@ -43,10 +43,9 @@ window size/scale/DPR/storage knobs and target architecture.
 ## How This Fits The Stack
 
 Linux targets consume compiled Gea apps and present the framework's software
-raster through a desktop window system. They are not the generic compiler,
-not the embedded hardware backend, and not a browser view. This repo is the
-Linux platform adapter layer: it owns the SDL2 display/input glue, the
-Linux storage/network backends, and Linux-specific target build scripts.
+raster through a desktop window system. This repo is the Linux platform
+adapter layer. It owns the SDL2 display/input glue, the Linux storage/network
+backends, and Linux-specific target build scripts.
 
 ## Maintenance Notes
 
