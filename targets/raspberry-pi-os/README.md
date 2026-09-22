@@ -37,14 +37,14 @@ Environment knobs (all optional):
   borderless fullscreen. **Esc** or closing the window quits. The title bar
   shows the app's display name. Known limitation: `<canvas>` apps whose
   drawing surface no longer matches the resized viewport fall back to
-  per-rect `streamRect` flushes, each of which presents — frame rate drops
-  hard after resizing such apps (tree/DOM apps reflow fine).
+  per-rect `streamRect` flushes, each of which presents, so frame rate drops
+  sharply after resizing such apps (tree/DOM apps reflow fine).
 - **Mouse**: left button drives the touch pipeline (pointer 0) — tap, drag,
   momentum scroll. The **wheel** scrolls the first scrollable container
   (48 px per notch) and is also delivered as `rotary` detents for knob-aware
   apps.
 - **Touchscreens**: SDL finger events feed the multi-pointer touch path with
-  stable pointer ids (up to 10 fingers), so a Pi touch display gets real
+  stable pointer ids (up to 10 fingers), so a Pi touch display gets
   multi-touch (SDL's touch→mouse synthesis is disabled to prevent double
   injection).
 - **Keyboard**: keys are queued as web keyCodes and dispatched framework-side
@@ -64,15 +64,15 @@ Environment knobs (all optional):
   both written atomically (tmp + rename). The main loop mirrors
   `runtime.cpp`'s plumbing: `Storage.load()` at boot, `flushPending()` per
   frame.
-- **fetch / HTTP(S)** (`main/rpios_network.cpp`) — real networking via
+- **fetch / HTTP(S)** (`main/rpios_network.cpp`) — networking via
   libcurl, injected through the desktop fetch seam (strong override of the
   weak `test_record_request`/`test_canned_response` hooks in core's
   `host/fetch.cpp`, the same pattern the Android target uses). Sync and
   async (`fetchAsync`) both work; async runs on detached worker threads.
   Redirects followed, gzip auto-decoded, `init.timeout_ms` honored
   (default 30 s).
-- **Wall-clock** — nothing to wire: `Date`/`Clock.epochMs()` are real on
-  Linux (`system_clock`/`gettimeofday`). The analog-clock example showing
+- **Wall-clock** — `Date`/`Clock.epochMs()` read the system clock
+  (`system_clock`/`gettimeofday`); no platform code is needed. The analog-clock example showing
   10:10 is app-side (its store hardcodes the base time), not a platform gap.
 
 ## Architecture
@@ -95,7 +95,7 @@ hardware paths:
   (POSIX monotonic clock, mutex-guarded ring queue).
 - `main/rpios_sensors.cpp` — Accelerometer/Memory stubs + the Touchscreen
   observer/cache (no reader thread; SDL injects from the main loop).
-- `main/rpios_storage.cpp`, `rpios_network.cpp` — real backends (see Platform
+- `main/rpios_storage.cpp`, `rpios_network.cpp` — the storage and network backends (see Platform
   services above).
 - `main/rpios_audio.cpp`, `rpios_memory.cpp`, `rpios_apps.c`,
   `rpios_app_platform.cpp` — audio stub (silent, same surface as macos/geaos),
@@ -135,7 +135,7 @@ yet). BLE reports no driver; audio is stubbed silent; the IMU returns zeros.
 - `tic-tac-toe` — precision click on the center cell places the mark in that
   cell (mouse → touch pipeline → gesture dispatch → store → re-render).
 - `analog-clock` — dial + hands render, digital seconds tick (the 10:10 base
-  is hardcoded in the app's store; platform `Date`/`Clock` return real
+  is hardcoded in the app's store; platform `Date`/`Clock` return the system
   wall-clock).
 - `css-animation-showcase` — rotate/opacity/color/scale/translate @keyframes
   all animate (the declarative CSS engine is driven per-frame by the main
