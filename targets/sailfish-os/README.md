@@ -6,8 +6,18 @@ geatsc; `sfdk` compiles the staged C/C++ sources for Sailfish OS 5.1.0.11.
 Requirements: Node.js 20.19+, `npm install` in this Linux repository and in
 the app's workspace, a checkout of `geastack/core`, and Sailfish SDK with the
 selected build target. The default core checkout is `../core` relative to this
-Linux repository. Use `-CoreRepository` for another location.
-Use `-SdkRoot` when Sailfish SDK is installed outside `C:\SailfishOS`.
+Linux repository. Pass `--core-repo` (Bash) or `-CoreRepository` (PowerShell)
+for another location.
+
+From the Linux repository on Linux:
+
+```sh
+./targets/sailfish-os/build-sailfish-os.sh ../examples/apps/tic-tac-toe --arch i486
+```
+
+The script finds `sfdk` on `PATH`. Pass `--sfdk /path/to/SailfishOS/bin/sfdk`
+if it is elsewhere. `--prepare-only` runs code generation and stages the
+portable project without invoking `sfdk`.
 
 From the Linux repository on Windows:
 
@@ -15,10 +25,11 @@ From the Linux repository on Windows:
 ./targets/sailfish-os/build-sailfish-os.ps1 -AppDirectory ../examples/apps/tic-tac-toe -Architecture i486
 ```
 
+Use `-SdkRoot` when Sailfish SDK is installed outside `C:\SailfishOS`.
+
 The RPM is written to
 `targets/sailfish-os/build/<app-id>-<architecture>/project/RPMS/`.
-Use `-PrepareOnly` to run code generation and stage the portable CMake/RPM
-project without invoking `sfdk`.
+Use `-PrepareOnly` in PowerShell for code generation without invoking `sfdk`.
 
 The Windows script invokes the installed `sfdk.exe` with session handling off.
 The SDK build engine must be running. On this host, invoking `sfdk.exe` inside

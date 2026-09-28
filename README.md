@@ -32,7 +32,7 @@ or closing the window quits. See
 [targets/raspberry-pi-os/README.md](targets/raspberry-pi-os/README.md) for
 window size/scale/DPR/storage knobs and target architecture.
 
-For Sailfish OS, use the standalone PowerShell build script described in
+For Sailfish OS, use the standalone Bash or PowerShell build script described in
 [targets/sailfish-os/README.md](targets/sailfish-os/README.md).
 
 ## Dependencies
