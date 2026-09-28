@@ -16,6 +16,10 @@ const coreRepo = path.resolve(coreArg || path.join(linuxRoot, '../core'))
 const meta = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'))
 const app = meta.gea
 if (!app?.id || !/^[a-z0-9][a-z0-9-]*$/.test(app.id)) throw new Error('gea.id must be a lowercase package identifier')
+const npmVersion = meta.version || '0.1.0'
+const versionMatch = typeof npmVersion === 'string' && npmVersion.match(/^(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
+if (!versionMatch) throw new Error('package.json version must be a valid x.y.z version with optional prerelease and build metadata')
+const rpmVersion = versionMatch[1] + (versionMatch[2] ? `~${versionMatch[2].replaceAll('-', '.')}` : '')
 const entry = app.entry || 'index.tsx'
 if (!fs.existsSync(path.join(appDir, entry))) throw new Error(`app entry missing: ${entry}`)
 const packageName = `harbour-gea-${app.id}`
@@ -57,7 +61,7 @@ const { includeFlags, cSources, cxxSources } = await import(pathToFileURL(path.j
 const rel = (file) => path.relative(stage, file).replaceAll('\\', '/')
 const c = [...cSources(env).map(rel), 'platform/main/rpios_apps.c']
 const cxx = cxxSources(env).filter((s) => !/\/(?:host\/camera|runtime|services\/[a-z_]+)\.cpp$/.test(s)).map(rel)
-for (const name of ['display', 'audio', 'memory', 'network', 'sensors', 'storage', 'timers', 'app_platform', 'main']) cxx.push(`platform/main/rpios_${name}.cpp`)
+for (const name of ['display', 'audio', 'memory', 'network', 'sensors', 'storage', 'storage_bridge', 'timers', 'app_platform', 'main']) cxx.push(`platform/main/rpios_${name}.cpp`)
 cxx.push('framework/core/gea_app_entry.cpp')
 for (const line of fs.readFileSync(path.join(generated, 'geatsc-sources.txt'), 'utf8').split(/\r?\n/).filter(Boolean)) {
   const file = path.resolve(line)
@@ -78,5 +82,5 @@ if (!icon || !fs.existsSync(path.join(appDir, icon))) throw new Error('app needs
 fs.copyFileSync(path.join(appDir, icon), path.join(stage, `${packageName}.png`))
 fs.writeFileSync(path.join(stage, `${packageName}.desktop`), `[Desktop Entry]\nType=Application\nName=${app.name || app.id}\nExec=${packageName}\nIcon=${packageName}\n`)
 fs.mkdirSync(path.join(stage, 'rpm'))
-fs.writeFileSync(path.join(stage, 'rpm', `${packageName}.spec`), `Name: ${packageName}\nVersion: ${meta.version || '0.1.0'}\nRelease: 1\nSummary: Gea ${app.name || app.id} for Sailfish OS\nLicense: ${meta.license || 'MIT'}\nBuildRequires: cmake\nBuildRequires: pkgconfig(sdl2)\nBuildRequires: pkgconfig(libcurl)\n\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${packageName}\n%{_datadir}/applications/${packageName}.desktop\n%{_datadir}/icons/hicolor/128x128/apps/${packageName}.png\n`)
+fs.writeFileSync(path.join(stage, 'rpm', `${packageName}.spec`), `Name: ${packageName}\nVersion: ${rpmVersion}\nRelease: 1\nSummary: Gea ${app.name || app.id} for Sailfish OS\nLicense: ${meta.license || 'MIT'}\nBuildRequires: cmake\nBuildRequires: pkgconfig(sdl2)\nBuildRequires: pkgconfig(libcurl)\n\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${packageName}\n%{_datadir}/applications/${packageName}.desktop\n%{_datadir}/icons/hicolor/128x128/apps/${packageName}.png\n`)
 console.log(stage)

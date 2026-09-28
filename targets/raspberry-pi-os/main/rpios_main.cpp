@@ -510,9 +510,7 @@ int main(int argc, char **argv)
 	// synced by rpios_storage_bridge.cpp) and the native StorageFacade
 	// (mirrors runtime.cpp's boot-time Storage.load()).
 	gea::framework::services::StorageService::init();
-#ifndef GEA_SAILFISH_OS
 	rpios_runtime_storage_load();
-#endif
 	gea::host::Storage.load();
 
 	gea::framework::app::Application::init(w, h, dpr);
@@ -585,9 +583,7 @@ int main(int argc, char **argv)
 		// Persist localStorage mutations from this frame (no-op unless changed;
 		// mirrors runtime.cpp's per-frame Storage.flushPending()). Both views:
 		// the geatsc runtime store (bridge) and the native facade.
-#ifndef GEA_SAILFISH_OS
 		rpios_runtime_storage_flush();
-#endif
 		gea::host::Storage.flushPending();
 		struct timespec t_af1;
 		clock_gettime(CLOCK_MONOTONIC, &t_af1);
