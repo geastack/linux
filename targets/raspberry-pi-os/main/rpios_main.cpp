@@ -30,7 +30,9 @@
 #include "event.h"
 #include "events.h"
 #include "input.h"
+#ifndef GEA_SAILFISH_OS
 #include "resident_apps.h"
+#endif
 #include "services/frame_scheduler.h"
 #include "css/declarative.h"
 #include "css/engine.h"
@@ -92,7 +94,11 @@ double devicePixelRatio()
 // CSS animation engine. Mirrors the geaos main loop / @geastack/core runtime.cpp.
 void driveCssAnimations(std::uint32_t nowMs)
 {
+#ifdef GEA_SAILFISH_OS
+	const char *active = nullptr;
+#else
 	const char *active = gea::framework::apps::ResidentApps::activeId();
+#endif
 	static char lastScanned[64] = {0};
 	static bool singleAppScanned = false;
 	const bool shouldScan = active ? std::strcmp(active, lastScanned) != 0 : !singleAppScanned;
@@ -435,7 +441,9 @@ void dispatchPendingEvents()
 		case gea::framework::events::EventType::Frame:
 		case gea::framework::events::EventType::Timeout:
 		case gea::framework::events::EventType::SettingsToggle:
+#ifndef GEA_SAILFISH_OS
 		case gea::framework::events::EventType::AppLaunch:
+#endif
 			break;
 		}
 	}
@@ -502,7 +510,9 @@ int main(int argc, char **argv)
 	// synced by rpios_storage_bridge.cpp) and the native StorageFacade
 	// (mirrors runtime.cpp's boot-time Storage.load()).
 	gea::framework::services::StorageService::init();
+#ifndef GEA_SAILFISH_OS
 	rpios_runtime_storage_load();
+#endif
 	gea::host::Storage.load();
 
 	gea::framework::app::Application::init(w, h, dpr);
@@ -575,7 +585,9 @@ int main(int argc, char **argv)
 		// Persist localStorage mutations from this frame (no-op unless changed;
 		// mirrors runtime.cpp's per-frame Storage.flushPending()). Both views:
 		// the geatsc runtime store (bridge) and the native facade.
+#ifndef GEA_SAILFISH_OS
 		rpios_runtime_storage_flush();
+#endif
 		gea::host::Storage.flushPending();
 		struct timespec t_af1;
 		clock_gettime(CLOCK_MONOTONIC, &t_af1);

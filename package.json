@@ -17,6 +17,8 @@
     "targets",
     "!targets/**/dist/**",
     "!targets/**/build/**",
+    "!targets/**/generated/**",
+    "!targets/**/*.log",
     "!targets/**/test/**",
     "README.md",
     "LICENSE",

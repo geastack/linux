@@ -56,7 +56,11 @@ int env_int(const char *name, int fallback, int lo, int hi)
 
 int g_canvas_width = env_int("GEA_RPIOS_WIDTH", gea::platform::display::kWidth, 64, 4096);
 int g_canvas_height = env_int("GEA_RPIOS_HEIGHT", gea::platform::display::kHeight, 64, 4096);
+#ifdef GEA_SAILFISH_OS
+int g_window_scale = env_int("GEA_RPIOS_SCALE", 1, 1, 8);
+#else
 int g_window_scale = env_int("GEA_RPIOS_SCALE", 2, 1, 8);
+#endif
 
 gea::framework::graphics::Canvas g_canvas;
 uint16_t *g_framebuffer = nullptr;
@@ -107,11 +111,15 @@ void ensure_window()
 #ifndef GEA_RPIOS_APP_TITLE
 #define GEA_RPIOS_APP_TITLE "gea"
 #endif
+	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+#ifdef GEA_SAILFISH_OS
+	window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+#endif
 	g_window = SDL_CreateWindow(GEA_RPIOS_APP_TITLE,
 	                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 	                            g_canvas_width * g_window_scale,
 	                            g_canvas_height * g_window_scale,
-	                            SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
+	                            window_flags);
 	if (!g_window) {
 		std::fprintf(stderr, "[rpios display] SDL_CreateWindow failed: %s\n", SDL_GetError());
 		return;
