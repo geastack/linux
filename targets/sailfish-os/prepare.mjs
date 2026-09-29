@@ -17,6 +17,10 @@ const coreRepo = path.resolve(coreArg || path.join(linuxRoot, '../core'))
 const meta = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'))
 const app = meta.gea
 if (!app?.id || !/^[a-z0-9][a-z0-9-]*$/.test(app.id)) throw new Error('gea.id must be a lowercase package identifier')
+const appName = String(app.name || app.id)
+const rpmLicense = String(meta.license || 'MIT')
+if (/[\x00-\x1f\x7f%\\";$]/.test(appName)) throw new Error('gea.name must not contain control characters or RPM/CMake syntax')
+if (/[\x00-\x1f\x7f%]/.test(rpmLicense)) throw new Error('package license must not contain control characters or RPM macros')
 const sailfish = app.sailfish || {}
 const organizationName = sailfish.organizationName || 'org.geastack'
 const applicationName = sailfish.applicationName || app.id.replaceAll('-', '_')
@@ -83,7 +87,7 @@ const includes = ['platform/include', 'generated', ...includeFlags(env).map((s) 
 for (const file of [...c, ...cxx]) if (!fs.existsSync(path.join(stage, file))) throw new Error(`source missing: ${file}`)
 const cmakeList = (key, values) => `set(${key}\n${values.map((s) => `  "${'${CMAKE_CURRENT_SOURCE_DIR}'}/${s}"`).join('\n')}\n)\n`
 fs.writeFileSync(path.join(stage, 'sources.cmake'),
-  `set(GEA_PACKAGE_NAME "${packageName}")\nset(GEA_APP_ID "${app.id}")\nset(GEA_APP_TITLE "${String(app.name || app.id).replaceAll('"', '')}")\nset(GEA_SAILFISH_ORGANIZATION_NAME "${organizationName}")\nset(GEA_SAILFISH_APPLICATION_NAME "${applicationName}")\n` +
+  `set(GEA_PACKAGE_NAME "${packageName}")\nset(GEA_APP_ID "${app.id}")\nset(GEA_APP_TITLE "${appName}")\nset(GEA_SAILFISH_ORGANIZATION_NAME "${organizationName}")\nset(GEA_SAILFISH_APPLICATION_NAME "${applicationName}")\n` +
   cmakeList('GEA_INCLUDE_DIRS', [...new Set(includes)]) + cmakeList('GEA_C_SOURCES', c) + cmakeList('GEA_CXX_SOURCES', cxx))
 const icon = app.icons?.['512'] || app.icons?.['256'] || app.icons?.['128']
 if (!icon || !fs.existsSync(path.join(appDir, icon))) throw new Error('app needs an icon source')
@@ -91,7 +95,7 @@ fs.mkdirSync(path.join(stage, 'icons'))
 for (const size of [86, 108, 128, 172]) {
   await sharp(path.join(appDir, icon)).resize(size, size, { fit: 'contain' }).png().toFile(path.join(stage, 'icons', `${size}.png`))
 }
-fs.writeFileSync(path.join(stage, `${packageName}.desktop`), `[Desktop Entry]\nType=Application\nName=${app.name || app.id}\nExec=${packageName}\nIcon=${packageName}\nX-Nemo-Application-Type=generic\n\n[X-Sailjail]\nOrganizationName=${organizationName}\nApplicationName=${applicationName}\nPermissions=${[...new Set(permissions)].join(';')}\n`)
+fs.writeFileSync(path.join(stage, `${packageName}.desktop`), `[Desktop Entry]\nType=Application\nName=${appName}\nExec=${packageName}\nIcon=${packageName}\nX-Nemo-Application-Type=generic\n\n[X-Sailjail]\nOrganizationName=${organizationName}\nApplicationName=${applicationName}\nPermissions=${[...new Set(permissions)].join(';')}\n`)
 fs.mkdirSync(path.join(stage, 'rpm'))
-fs.writeFileSync(path.join(stage, 'rpm', `${packageName}.spec`), `Name: ${packageName}\nVersion: ${rpmVersion}\nRelease: 1\nSummary: Gea ${app.name || app.id} for Sailfish OS\nLicense: ${meta.license || 'MIT'}\nBuildRequires: cmake\nBuildRequires: pkgconfig(sdl2)\nBuildRequires: pkgconfig(libcurl)\n\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${packageName}\n%{_datadir}/applications/${packageName}.desktop\n%{_datadir}/icons/hicolor/*/apps/${packageName}.png\n`)
+fs.writeFileSync(path.join(stage, 'rpm', `${packageName}.spec`), `Name: ${packageName}\nVersion: ${rpmVersion}\nRelease: 1\nSummary: Gea ${appName} for Sailfish OS\nLicense: ${rpmLicense}\nBuildRequires: cmake\nBuildRequires: pkgconfig(sdl2)\nBuildRequires: pkgconfig(libcurl)\n\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${packageName}\n%{_datadir}/applications/${packageName}.desktop\n%{_datadir}/icons/hicolor/*/apps/${packageName}.png\n`)
 console.log(stage)
