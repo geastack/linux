@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import sharp from 'sharp'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const linuxRoot = path.resolve(here, '../..')
@@ -16,6 +17,13 @@ const coreRepo = path.resolve(coreArg || path.join(linuxRoot, '../core'))
 const meta = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'))
 const app = meta.gea
 if (!app?.id || !/^[a-z0-9][a-z0-9-]*$/.test(app.id)) throw new Error('gea.id must be a lowercase package identifier')
+const sailfish = app.sailfish || {}
+const organizationName = sailfish.organizationName || 'org.geastack'
+const applicationName = sailfish.applicationName || app.id.replaceAll('-', '_')
+const permissions = sailfish.permissions || []
+if (!/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(organizationName)) throw new Error('gea.sailfish.organizationName must be a reverse-domain name')
+if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(applicationName)) throw new Error('gea.sailfish.applicationName must contain only letters, digits, and underscores')
+if (!Array.isArray(permissions) || !permissions.every((item) => typeof item === 'string' && /^[A-Za-z]+$/.test(item))) throw new Error('gea.sailfish.permissions must be an array of permission names')
 const npmVersion = meta.version || '0.1.0'
 const versionMatch = typeof npmVersion === 'string' && npmVersion.match(/^(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
 if (!versionMatch) throw new Error('package.json version must be a valid x.y.z version with optional prerelease and build metadata')
@@ -75,12 +83,15 @@ const includes = ['platform/include', 'generated', ...includeFlags(env).map((s) 
 for (const file of [...c, ...cxx]) if (!fs.existsSync(path.join(stage, file))) throw new Error(`source missing: ${file}`)
 const cmakeList = (key, values) => `set(${key}\n${values.map((s) => `  "${'${CMAKE_CURRENT_SOURCE_DIR}'}/${s}"`).join('\n')}\n)\n`
 fs.writeFileSync(path.join(stage, 'sources.cmake'),
-  `set(GEA_PACKAGE_NAME "${packageName}")\nset(GEA_APP_ID "${app.id}")\nset(GEA_APP_TITLE "${String(app.name || app.id).replaceAll('"', '')}")\n` +
+  `set(GEA_PACKAGE_NAME "${packageName}")\nset(GEA_APP_ID "${app.id}")\nset(GEA_APP_TITLE "${String(app.name || app.id).replaceAll('"', '')}")\nset(GEA_SAILFISH_ORGANIZATION_NAME "${organizationName}")\nset(GEA_SAILFISH_APPLICATION_NAME "${applicationName}")\n` +
   cmakeList('GEA_INCLUDE_DIRS', [...new Set(includes)]) + cmakeList('GEA_C_SOURCES', c) + cmakeList('GEA_CXX_SOURCES', cxx))
-const icon = app.icons?.['128'] || app.icons?.['256'] || app.icons?.['512']
-if (!icon || !fs.existsSync(path.join(appDir, icon))) throw new Error('app needs a PNG icon of at least 128px')
-fs.copyFileSync(path.join(appDir, icon), path.join(stage, `${packageName}.png`))
-fs.writeFileSync(path.join(stage, `${packageName}.desktop`), `[Desktop Entry]\nType=Application\nName=${app.name || app.id}\nExec=${packageName}\nIcon=${packageName}\n`)
+const icon = app.icons?.['512'] || app.icons?.['256'] || app.icons?.['128']
+if (!icon || !fs.existsSync(path.join(appDir, icon))) throw new Error('app needs an icon source')
+fs.mkdirSync(path.join(stage, 'icons'))
+for (const size of [86, 108, 128, 172]) {
+  await sharp(path.join(appDir, icon)).resize(size, size, { fit: 'contain' }).png().toFile(path.join(stage, 'icons', `${size}.png`))
+}
+fs.writeFileSync(path.join(stage, `${packageName}.desktop`), `[Desktop Entry]\nType=Application\nName=${app.name || app.id}\nExec=${packageName}\nIcon=${packageName}\nX-Nemo-Application-Type=generic\n\n[X-Sailjail]\nOrganizationName=${organizationName}\nApplicationName=${applicationName}\nPermissions=${[...new Set(permissions)].join(';')}\n`)
 fs.mkdirSync(path.join(stage, 'rpm'))
-fs.writeFileSync(path.join(stage, 'rpm', `${packageName}.spec`), `Name: ${packageName}\nVersion: ${rpmVersion}\nRelease: 1\nSummary: Gea ${app.name || app.id} for Sailfish OS\nLicense: ${meta.license || 'MIT'}\nBuildRequires: cmake\nBuildRequires: pkgconfig(sdl2)\nBuildRequires: pkgconfig(libcurl)\n\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${packageName}\n%{_datadir}/applications/${packageName}.desktop\n%{_datadir}/icons/hicolor/128x128/apps/${packageName}.png\n`)
+fs.writeFileSync(path.join(stage, 'rpm', `${packageName}.spec`), `Name: ${packageName}\nVersion: ${rpmVersion}\nRelease: 1\nSummary: Gea ${app.name || app.id} for Sailfish OS\nLicense: ${meta.license || 'MIT'}\nBuildRequires: cmake\nBuildRequires: pkgconfig(sdl2)\nBuildRequires: pkgconfig(libcurl)\n\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${packageName}\n%{_datadir}/applications/${packageName}.desktop\n%{_datadir}/icons/hicolor/*/apps/${packageName}.png\n`)
 console.log(stage)

@@ -4,8 +4,9 @@
  * loadKv/saveKv store it verbatim) and for device-settings strings
  * (getString/setString, a small chunked KV file of our own).
  *
- * Layout: $GEA_RPIOS_STORAGE_DIR, else $XDG_DATA_HOME/gea/<app-id>, else
- * ~/.local/share/gea/<app-id>. Files: localstorage.bin, settings.bin.
+ * Layout: $GEA_RPIOS_STORAGE_DIR, else $XDG_DATA_HOME/gea/<app-id> on
+ * Raspberry Pi OS or $XDG_DATA_HOME/<organization>/<application> on Sailfish,
+ * falling back to ~/.local/share. Files: localstorage.bin, settings.bin.
  * Writes are atomic (tmp + rename) so a crash mid-write never corrupts the
  * previous state. saveKv is called from the frame task once per frame at most
  * (StorageFacade::flushPending only writes when dirty), so plain synchronous
@@ -48,7 +49,11 @@ std::string storageDir()
 			const char *home = std::getenv("HOME");
 			base = std::string(home && *home ? home : ".") + "/.local/share";
 		}
+#ifdef GEA_SAILFISH_OS
+		return base + "/" + GEA_SAILFISH_ORGANIZATION_NAME + "/" + GEA_SAILFISH_APPLICATION_NAME;
+#else
 		return base + "/gea/" + GEA_RPIOS_APP_ID;
+#endif
 	}();
 	return dir;
 }

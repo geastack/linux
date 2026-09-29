@@ -19,6 +19,13 @@ The script finds `sfdk` on `PATH`. Pass `--sfdk /path/to/SailfishOS/bin/sfdk`
 if it is elsewhere. `--prepare-only` runs code generation and stages the
 portable project without invoking `sfdk`.
 
+The app's `gea.icons` entry supplies the icon source. Preparation generates
+86, 108, 128, and 172 pixel PNGs for Harbour. For sandbox permissions, set
+`gea.sailfish.organizationName`, `applicationName`, and `permissions` in the
+app's `package.json`. The default identity is `org.geastack` and the app ID
+with hyphens replaced by underscores; permissions default to an empty list.
+Set only permissions the app actually needs, such as `Audio` for sound.
+
 From the Linux repository on Windows:
 
 ```powershell
@@ -30,6 +37,9 @@ Use `-SdkRoot` when Sailfish SDK is installed outside `C:\SailfishOS`.
 The RPM is written to
 `targets/sailfish-os/build/<app-id>-<architecture>/project/RPMS/`.
 Use `-PrepareOnly` in PowerShell for code generation without invoking `sfdk`.
+Before submitting a device package to Harbour, run `sfdk check` on its RPM.
+The `i486` build is for the emulator; build for the architecture of the target
+device before publishing.
 
 The Windows script invokes the installed `sfdk.exe` with session handling off.
 The SDK build engine must be running. On this host, invoking `sfdk.exe` inside

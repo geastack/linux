@@ -28,9 +28,10 @@
     "access": "public"
   },
   "dependencies": {
-    "@geastack/core": "^0.1.23",
     "@geastack/compiler": "^1.0.15",
-    "@geastack/geatsc-plugin-gea": "^0.1.6"
+    "@geastack/core": "^0.1.23",
+    "@geastack/geatsc-plugin-gea": "^0.1.6",
+    "sharp": "^0.35.5"
   },
   "scripts": {
     "test": "for f in $(git ls-files | grep -E '(^|/)(test[-_][^/]*|[^/]*\\.test)\\.mjs$'); do echo \"==> $f\"; node \"$f\" || exit 1; done"
