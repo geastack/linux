@@ -4,8 +4,8 @@
  * loadKv/saveKv store it verbatim) and for device-settings strings
  * (getString/setString, a small chunked KV file of our own).
  *
- * Layout: $GEA_RPIOS_STORAGE_DIR, else $XDG_DATA_HOME/gea/<app-id>,
- * falling back to ~/.local/share. Files: localstorage.bin, settings.bin.
+ * Layout: $GEA_RPIOS_STORAGE_DIR, else $XDG_DATA_HOME/gea/<app-id>, else
+ * ~/.local/share/gea/<app-id>. Files: localstorage.bin, settings.bin.
  * Writes are atomic (tmp + rename) so a crash mid-write never corrupts the
  * previous state. saveKv is called from the frame task once per frame at most
  * (StorageFacade::flushPending only writes when dirty), so plain synchronous

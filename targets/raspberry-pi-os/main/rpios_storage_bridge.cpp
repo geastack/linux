@@ -2,8 +2,9 @@
  * Persistence bridge for the geatsc runtime's `localStorage`.
  *
  * geatsc-compiled apps don't use gea::host::StorageFacade — the generated
- * runtime has its own in-RAM store, gea::host::storage::table() in the
- * generated gea_runtime.h. Nothing in the generated runtime persists it, so
+ * runtime has its own in-RAM store, gea::runtime::host::Storage, shared
+ * through gea::runtime::host::local_storage() (see the app's generated
+ * host_globals.{h,cpp}). Nothing in the generated runtime persists it, so
  * without this bridge every localStorage write dies with the process.
  *
  * The bridge syncs that store with the target's StorageService file backend
@@ -19,7 +20,8 @@
  * already on the include path).
  */
 
-#include "gea_runtime.h"
+#include "runtime_pch.h"
+#include "host_globals.h"
 
 #include "services/storage_service.h"
 
@@ -33,9 +35,9 @@ std::string g_last_blob;
 
 std::string serializeEntries()
 {
-	auto &storage = gea::host::storage::table();
+	auto &storage = gea::runtime::host::local_storage();
 	std::string out;
-	for (const auto &entry : storage) {
+	for (const auto &entry : storage.entries) {
 		for (const std::string *part : {&entry.first, &entry.second}) {
 			const std::uint32_t len = (std::uint32_t)part->size();
 			char header[sizeof(len)];
@@ -53,8 +55,8 @@ extern "C" void rpios_runtime_storage_load()
 {
 	std::string blob;
 	gea::framework::services::StorageService::loadKv(blob);
-	auto &storage = gea::host::storage::table();
-	storage.clear();
+	auto &storage = gea::runtime::host::local_storage();
+	storage.entries.clear();
 	std::size_t pos = 0;
 	auto readChunk = [&](std::string &out) {
 		if (pos + sizeof(std::uint32_t) > blob.size()) return false;
@@ -67,7 +69,8 @@ extern "C" void rpios_runtime_storage_load()
 		return true;
 	};
 	std::string k, v;
-	while (readChunk(k) && readChunk(v)) storage[k] = v;
+	while (readChunk(k) && readChunk(v)) storage.entries.push_back({k, v});
+	storage.length = (double)storage.entries.size();
 	g_last_blob = blob;
 }
 

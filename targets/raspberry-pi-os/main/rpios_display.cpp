@@ -83,15 +83,8 @@ int g_flush_depth = 0;
 void ensure_canvas()
 {
 	if (g_framebuffer) return;
-	const size_t pixels = (size_t)g_canvas_width * (size_t)g_canvas_height;
-	uint16_t *fb = static_cast<uint16_t *>(std::calloc(pixels, sizeof(uint16_t)));
-	if (!fb) {
-		std::fprintf(stderr, "[rpios display] framebuffer allocation failed (%dx%d)\n",
-		             g_canvas_width, g_canvas_height);
-		return;
-	}
-	g_framebuffer = fb;
-	g_framebuffer_pixels = pixels;
+	g_framebuffer_pixels = (size_t)g_canvas_width * (size_t)g_canvas_height;
+	g_framebuffer = static_cast<uint16_t *>(std::calloc(g_framebuffer_pixels, sizeof(uint16_t)));
 	g_canvas.bindPixels(g_framebuffer, g_canvas_width, g_canvas_height);
 }
 
@@ -99,7 +92,6 @@ void ensure_window()
 {
 	if (g_sdl_ok) return;
 	ensure_canvas();
-	if (!g_framebuffer) return;
 	static bool attempted = false;
 	if (attempted) return;
 	attempted = true;
@@ -115,12 +107,11 @@ void ensure_window()
 #ifndef GEA_RPIOS_APP_TITLE
 #define GEA_RPIOS_APP_TITLE "gea"
 #endif
-	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
 	g_window = SDL_CreateWindow(GEA_RPIOS_APP_TITLE,
 	                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 	                            g_canvas_width * g_window_scale,
 	                            g_canvas_height * g_window_scale,
-	                            window_flags);
+	                            SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
 	if (!g_window) {
 		std::fprintf(stderr, "[rpios display] SDL_CreateWindow failed: %s\n", SDL_GetError());
 		return;
@@ -311,14 +302,12 @@ gea::framework::graphics::Canvas *Display::canvas()
 void Display::rebindCanvasToFramebuffer()
 {
 	ensure_canvas();
-	if (!g_framebuffer) return;
 	g_canvas.bindPixels(g_framebuffer, g_canvas_width, g_canvas_height);
 }
 
 void Display::clear()
 {
 	ensure_canvas();
-	if (!g_framebuffer) return;
 	std::memset(g_framebuffer, 0, g_framebuffer_pixels * sizeof(uint16_t));
 	flush();
 }
@@ -326,7 +315,6 @@ void Display::clear()
 void Display::clearNoFlush()
 {
 	ensure_canvas();
-	if (!g_framebuffer) return;
 	std::memset(g_framebuffer, 0, g_framebuffer_pixels * sizeof(uint16_t));
 }
 
