@@ -46,8 +46,14 @@ The SDK build engine must be running. On this host, invoking `sfdk.exe` inside
 MSYS2 fails to identify its Docker engine, while the PowerShell invocation
 works. MSYS2 remains installed for the SDK's other command-line workflows.
 
-The Sailfish target shares SDL2 rendering, touch, storage, and network sources
-with the Raspberry Pi OS target. Its compile definition selects a scale of 1
-and a fullscreen window. The i486 RPM was installed on the Sailfish OS
+The Sailfish target owns its platform sources in `main/` and `include/`.
+Its SDL2 backend starts fullscreen with a scale of 1. Platform symbols and
+configuration use the `sailfish_` and `GEA_SAILFISH_` prefixes. Storage uses
+the organization and application names from the app's Sailjail identity.
+
+Runtime overrides are `GEA_SAILFISH_WIDTH`, `GEA_SAILFISH_HEIGHT`,
+`GEA_SAILFISH_SCALE`, `GEA_SAILFISH_DPR`, and `GEA_SAILFISH_STORAGE_DIR`.
+
+The i486 RPM was installed on the Sailfish OS
 5.1.0.11 emulator; Tic Tac Toe rendered and mouse clicks changed the board.
 Physical device behavior has not been tested.

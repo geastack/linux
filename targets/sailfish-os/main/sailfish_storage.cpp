@@ -1,18 +1,19 @@
-/* targets/raspberry-pi-os/main/rpios_storage.cpp
+/* targets/sailfish-os/main/sailfish_storage.cpp
  * File-backed StorageService — persistence for the app-facing `localStorage`
  * (gea::host::StorageFacade serializes the whole KV set to one opaque blob;
  * loadKv/saveKv store it verbatim) and for device-settings strings
  * (getString/setString, a small chunked KV file of our own).
  *
- * Layout: $GEA_RPIOS_STORAGE_DIR, else $XDG_DATA_HOME/gea/<app-id>,
- * falling back to ~/.local/share. Files: localstorage.bin, settings.bin.
+ * Layout: $GEA_SAILFISH_STORAGE_DIR, else
+ * $XDG_DATA_HOME/<organization>/<application>, using the Sailjail identity.
+ * Falls back to ~/.local/share. Files: localstorage.bin, settings.bin.
  * Writes are atomic (tmp + rename) so a crash mid-write never corrupts the
  * previous state. saveKv is called from the frame task once per frame at most
  * (StorageFacade::flushPending only writes when dirty), so plain synchronous
  * IO is fine.
  *
  * The embedded analogue is targets/esp32/services/storage_service.cpp (NVS
- * blob "ls_kv"); no other desktop target implements persistence yet.
+ * blob "ls_kv").
  */
 
 #include "services/storage_service.h"
@@ -29,16 +30,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#ifndef GEA_RPIOS_APP_ID
-#define GEA_RPIOS_APP_ID "app"
-#endif
-
 namespace {
 
 std::string storageDir()
 {
 	static std::string dir = [] {
-		const char *override_dir = std::getenv("GEA_RPIOS_STORAGE_DIR");
+		const char *override_dir = std::getenv("GEA_SAILFISH_STORAGE_DIR");
 		if (override_dir && *override_dir) return std::string(override_dir);
 		std::string base;
 		const char *xdg = std::getenv("XDG_DATA_HOME");
@@ -48,7 +45,7 @@ std::string storageDir()
 			const char *home = std::getenv("HOME");
 			base = std::string(home && *home ? home : ".") + "/.local/share";
 		}
-		return base + "/gea/" + GEA_RPIOS_APP_ID;
+		return base + "/" + GEA_SAILFISH_ORGANIZATION_NAME + "/" + GEA_SAILFISH_APPLICATION_NAME;
 	}();
 	return dir;
 }

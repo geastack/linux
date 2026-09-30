@@ -62,8 +62,8 @@ for (const name of ['core', 'host', 'engine', 'elements', 'geaos']) {
   copyTree(source, path.join(stage, 'framework', name))
 }
 copyTree(generated, path.join(stage, 'generated'))
-copyTree(path.join(linuxRoot, 'targets/raspberry-pi-os/main'), path.join(stage, 'platform/main'))
-copyTree(path.join(linuxRoot, 'targets/raspberry-pi-os/include'), path.join(stage, 'platform/include'))
+copyTree(path.join(here, 'main'), path.join(stage, 'platform/main'))
+copyTree(path.join(here, 'include'), path.join(stage, 'platform/include'))
 fs.copyFileSync(path.join(here, 'CMakeLists.txt'), path.join(stage, 'CMakeLists.txt'))
 
 const env = Object.fromEntries(['core', 'host', 'engine', 'elements', 'geaos'].map((name) => [
@@ -71,9 +71,9 @@ const env = Object.fromEntries(['core', 'host', 'engine', 'elements', 'geaos'].m
   path.join(stage, 'framework', name).replaceAll('\\', '/')]))
 const { includeFlags, cSources, cxxSources } = await import(pathToFileURL(path.join(coreRepo, 'packages/core/gea_sources.mjs')))
 const rel = (file) => path.relative(stage, file).replaceAll('\\', '/')
-const c = [...cSources(env).map(rel), 'platform/main/rpios_apps.c']
+const c = [...cSources(env).map(rel), 'platform/main/sailfish_apps.c']
 const cxx = cxxSources(env).filter((s) => !/\/(?:host\/camera|runtime|services\/[a-z_]+)\.cpp$/.test(s)).map(rel)
-for (const name of ['display', 'audio', 'memory', 'network', 'sensors', 'storage', 'storage_bridge', 'timers', 'app_platform', 'main']) cxx.push(`platform/main/rpios_${name}.cpp`)
+for (const name of ['display', 'audio', 'memory', 'network', 'sensors', 'storage', 'storage_bridge', 'timers', 'app_platform', 'main']) cxx.push(`platform/main/sailfish_${name}.cpp`)
 cxx.push('framework/core/gea_app_entry.cpp')
 for (const line of fs.readFileSync(path.join(generated, 'geatsc-sources.txt'), 'utf8').split(/\r?\n/).filter(Boolean)) {
   const file = path.resolve(line)

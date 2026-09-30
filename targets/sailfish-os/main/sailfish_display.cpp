@@ -1,7 +1,5 @@
-/* targets/raspberry-pi-os/main/rpios_display.cpp
- * Linux desktop display backend — an SDL2 window under X11/Wayland.
- * Developed and tested on a Raspberry Pi 5 running the Raspberry Pi OS
- * desktop (labwc), but nothing here is Pi-specific.
+/* targets/sailfish-os/main/sailfish_display.cpp
+ * Sailfish OS display backend — a fullscreen SDL2 window under Wayland.
  *
  * Architecture (same shape as targets/geaos/main/geaos_display.cpp, minus
  * the MTK OVL/fbdev machinery):
@@ -10,23 +8,23 @@
  *   - Display::flush() / flushRects() upload the dirty region of that buffer
  *     into an SDL_PIXELFORMAT_RGB565 streaming texture and present it. The
  *     renderer is created with PRESENTVSYNC, so a presenting frame blocks to
- *     vblank — the main loop reads rpios_display_consume_vsync_wait() to skip
+ *     vblank — the main loop reads sailfish_display_consume_vsync_wait() to skip
  *     its own nanosleep on those frames (same double-pacing fix as geaos).
  *   - Display::pushClip / popClip forward to the Canvas clip stack — the
  *     framework relies on a working clip to constrain each dirty-region
  *     replay; stubbing them tanks fps (see the geaos header comment).
  *   - The window is an integer-scaled view of the logical canvas
- *     (GEA_RPIOS_SCALE, default 2): the canvas stays at the app's tuned
- *     logical size while the on-monitor window is comfortably large.
+ *     (GEA_SAILFISH_SCALE, default 1): the canvas stays at the app's tuned
+ *     logical size while the window fills the device screen.
  *
  * Window size / scale / DPR come from the environment so apps tuned for a
  * particular panel can be reproduced exactly:
- *   GEA_RPIOS_WIDTH   logical canvas width   (default 410 — amoled-2.06)
- *   GEA_RPIOS_HEIGHT  logical canvas height  (default 502)
- *   GEA_RPIOS_SCALE   integer window scale   (default 2)
+ *   GEA_SAILFISH_WIDTH   logical canvas width   (default 410 — amoled-2.06)
+ *   GEA_SAILFISH_HEIGHT  logical canvas height  (default 502)
+ *   GEA_SAILFISH_SCALE   integer window scale   (default 1)
  *
  * The window is resizable: the main loop reacts to SDL_WINDOWEVENT_SIZE_CHANGED
- * by calling rpios_display_resize(), which reallocates the framebuffer +
+ * by calling sailfish_display_resize(), which reallocates the framebuffer +
  * texture at the new logical size (window size / scale) and re-points the
  * Canvas binding. F11 toggles borderless fullscreen (same resize path).
  */
@@ -54,9 +52,9 @@ int env_int(const char *name, int fallback, int lo, int hi)
 	return n;
 }
 
-int g_canvas_width = env_int("GEA_RPIOS_WIDTH", gea::platform::display::kWidth, 64, 4096);
-int g_canvas_height = env_int("GEA_RPIOS_HEIGHT", gea::platform::display::kHeight, 64, 4096);
-int g_window_scale = env_int("GEA_RPIOS_SCALE", 2, 1, 8);
+int g_canvas_width = env_int("GEA_SAILFISH_WIDTH", gea::platform::display::kWidth, 64, 4096);
+int g_canvas_height = env_int("GEA_SAILFISH_HEIGHT", gea::platform::display::kHeight, 64, 4096);
+int g_window_scale = env_int("GEA_SAILFISH_SCALE", 1, 1, 8);
 
 gea::framework::graphics::Canvas g_canvas;
 uint16_t *g_framebuffer = nullptr;
@@ -69,7 +67,7 @@ bool g_sdl_ok = false;
 bool g_vsync_waited = false;
 
 // Static-backdrop cache (see gea_backdrop_cache below). Globals so
-// rpios_display_resize can grow it when the logical canvas grows.
+// sailfish_display_resize can grow it when the logical canvas grows.
 uint16_t *g_backdrop_buffer = nullptr;
 int g_backdrop_cap = 0;
 
@@ -86,7 +84,7 @@ void ensure_canvas()
 	const size_t pixels = (size_t)g_canvas_width * (size_t)g_canvas_height;
 	uint16_t *fb = static_cast<uint16_t *>(std::calloc(pixels, sizeof(uint16_t)));
 	if (!fb) {
-		std::fprintf(stderr, "[rpios display] framebuffer allocation failed (%dx%d)\n",
+		std::fprintf(stderr, "[sailfish display] framebuffer allocation failed (%dx%d)\n",
 		             g_canvas_width, g_canvas_height);
 		return;
 	}
@@ -103,25 +101,26 @@ void ensure_window()
 	if (attempted) return;
 	attempted = true;
 
-	// Fingers drive the touch pipeline directly (SDL_FINGER* in rpios_main);
+	// Fingers drive the touch pipeline directly (SDL_FINGER* in sailfish_main);
 	// without this hint SDL would synthesize mouse events from touches and the
 	// same finger would inject twice.
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 	if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-		std::fprintf(stderr, "[rpios display] SDL_Init failed: %s\n", SDL_GetError());
+		std::fprintf(stderr, "[sailfish display] SDL_Init failed: %s\n", SDL_GetError());
 		return;
 	}
-#ifndef GEA_RPIOS_APP_TITLE
-#define GEA_RPIOS_APP_TITLE "gea"
+#ifndef GEA_SAILFISH_APP_TITLE
+#define GEA_SAILFISH_APP_TITLE "gea"
 #endif
 	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
-	g_window = SDL_CreateWindow(GEA_RPIOS_APP_TITLE,
+	window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+	g_window = SDL_CreateWindow(GEA_SAILFISH_APP_TITLE,
 	                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 	                            g_canvas_width * g_window_scale,
 	                            g_canvas_height * g_window_scale,
 	                            window_flags);
 	if (!g_window) {
-		std::fprintf(stderr, "[rpios display] SDL_CreateWindow failed: %s\n", SDL_GetError());
+		std::fprintf(stderr, "[sailfish display] SDL_CreateWindow failed: %s\n", SDL_GetError());
 		return;
 	}
 	g_renderer = SDL_CreateRenderer(g_window, -1,
@@ -132,7 +131,7 @@ void ensure_window()
 		g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
 	}
 	if (!g_renderer) {
-		std::fprintf(stderr, "[rpios display] SDL_CreateRenderer failed: %s\n", SDL_GetError());
+		std::fprintf(stderr, "[sailfish display] SDL_CreateRenderer failed: %s\n", SDL_GetError());
 		return;
 	}
 	// Integer-scale the logical canvas to the window; nearest keeps pixels crisp.
@@ -142,13 +141,13 @@ void ensure_window()
 	                              SDL_TEXTUREACCESS_STREAMING,
 	                              g_canvas_width, g_canvas_height);
 	if (!g_texture) {
-		std::fprintf(stderr, "[rpios display] SDL_CreateTexture failed: %s\n", SDL_GetError());
+		std::fprintf(stderr, "[sailfish display] SDL_CreateTexture failed: %s\n", SDL_GetError());
 		return;
 	}
 	SDL_RendererInfo info{};
 	SDL_GetRendererInfo(g_renderer, &info);
 	g_sdl_ok = true;
-	std::fprintf(stderr, "[rpios display] SDL window %dx%d (scale %d, renderer %s%s)\n",
+	std::fprintf(stderr, "[sailfish display] SDL window %dx%d (scale %d, renderer %s%s)\n",
 	             g_canvas_width, g_canvas_height, g_window_scale, info.name,
 	             (info.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : "");
 }
@@ -199,13 +198,13 @@ void copy_rgb565_rows_to_canvas(const uint16_t *pixels, int x, int y, int width,
 
 }  // namespace
 
-extern "C" int rpios_canvas_width()  { return g_canvas_width; }
-extern "C" int rpios_canvas_height() { return g_canvas_height; }
+extern "C" int sailfish_canvas_width()  { return g_canvas_width; }
+extern "C" int sailfish_canvas_height() { return g_canvas_height; }
 
 // Returns 1 (and clears the flag) if a present blocked on vsync since the last
 // call — the main loop uses this to avoid double-pacing (its own nanosleep on
 // top of SDL's vsynced present). Same contract as geaos_display_consume_vsync_wait.
-extern "C" int rpios_display_consume_vsync_wait()
+extern "C" int sailfish_display_consume_vsync_wait()
 {
 	if (g_vsync_waited) { g_vsync_waited = false; return 1; }
 	return 0;
@@ -215,7 +214,7 @@ extern "C" int rpios_display_consume_vsync_wait()
 // DisplayList::maybeBakeStaticBackdrop and the geaos_display.cpp comment: the
 // weak nullptr default makes dirty-region replay erase static content painted
 // before an animated subtree). Desktop RAM is plentiful; one RGB565 canvas.
-// Grown by rpios_display_resize when the logical canvas outgrows it.
+// Grown by sailfish_display_resize when the logical canvas outgrows it.
 extern "C" std::uint16_t *gea_backdrop_cache(int *cap_px)
 {
 	if (!g_backdrop_buffer && g_canvas_width > 0 && g_canvas_height > 0) {
@@ -229,12 +228,12 @@ extern "C" std::uint16_t *gea_backdrop_cache(int *cap_px)
 
 // Re-present the current texture (window exposed/restored after being
 // obscured; the framework doesn't know pixels were lost).
-extern "C" void rpios_display_present()
+extern "C" void sailfish_display_present()
 {
 	if (g_sdl_ok) present_texture();
 }
 
-extern "C" void rpios_display_toggle_fullscreen()
+extern "C" void sailfish_display_toggle_fullscreen()
 {
 	if (!g_window) return;
 	const bool full = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
@@ -242,13 +241,13 @@ extern "C" void rpios_display_toggle_fullscreen()
 	// The resulting SDL_WINDOWEVENT_SIZE_CHANGED drives the resize path.
 }
 
-extern "C" int rpios_display_window_scale() { return g_window_scale; }
+extern "C" int sailfish_display_window_scale() { return g_window_scale; }
 
 // Rebuild the framebuffer + streaming texture at a new logical size (window
 // resized or fullscreen toggled). The canvas rebinds to the new buffer; the
-// caller (rpios_main) then updates the framework viewport metrics and marks
+// caller (sailfish_main) then updates the framework viewport metrics and marks
 // the tree fully dirty so the next frame repaints everything.
-extern "C" int rpios_display_resize(int new_width, int new_height)
+extern "C" int sailfish_display_resize(int new_width, int new_height)
 {
 	if (new_width < 64) new_width = 64;
 	if (new_height < 64) new_height = 64;
@@ -265,7 +264,7 @@ extern "C" int rpios_display_resize(int new_width, int new_height)
 		                                         SDL_TEXTUREACCESS_STREAMING,
 		                                         new_width, new_height);
 		if (!texture) {
-			std::fprintf(stderr, "[rpios display] resize texture failed: %s\n", SDL_GetError());
+			std::fprintf(stderr, "[sailfish display] resize texture failed: %s\n", SDL_GetError());
 			std::free(fb);
 			return 0;
 		}

@@ -15,7 +15,7 @@ targets include Raspberry Pi OS on the Raspberry Pi 5 and Sailfish OS.
 | Path | Purpose |
 | --- | --- |
 | `targets/raspberry-pi-os` | Raspberry Pi OS (Bookworm+ desktop, labwc/Wayland) SDL2 target: platform sources, build script, and target docs. |
-| `targets/sailfish-os` | Sailfish OS 5.1 SDK target: host code generation, portable CMake project, and i486 RPM packaging. |
+| `targets/sailfish-os` | Sailfish OS 5.1 target: its own platform sources, host code generation, portable CMake project, and i486 RPM packaging. |
 
 ## Quick Start
 
