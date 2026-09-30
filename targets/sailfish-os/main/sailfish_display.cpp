@@ -14,14 +14,16 @@
  *     framework relies on a working clip to constrain each dirty-region
  *     replay; stubbing them tanks fps (see the geaos header comment).
  *   - The window is an integer-scaled view of the logical canvas
- *     (GEA_SAILFISH_SCALE, default 1): the canvas stays at the app's tuned
- *     logical size while the window fills the device screen.
+ *     (GEA_SAILFISH_SCALE, default 1). After a window resize, the canvas is
+ *     resized to window size / scale. At the default scale and DPR of 1,
+ *     one CSS pixel is one canvas pixel and one SDL window coordinate unit.
  *
  * Window size / scale / DPR come from the environment so apps tuned for a
  * particular panel can be reproduced exactly:
- *   GEA_SAILFISH_WIDTH   logical canvas width   (default 410 — amoled-2.06)
- *   GEA_SAILFISH_HEIGHT  logical canvas height  (default 502)
+ *   GEA_SAILFISH_WIDTH   initial canvas width   (default 410)
+ *   GEA_SAILFISH_HEIGHT  initial canvas height  (default 502)
  *   GEA_SAILFISH_SCALE   integer window scale   (default 1)
+ *   GEA_SAILFISH_DPR     canvas pixels per CSS pixel (app setting, otherwise 1)
  *
  * The window is resizable: the main loop reacts to SDL_WINDOWEVENT_SIZE_CHANGED
  * by calling sailfish_display_resize(), which reallocates the framebuffer +
@@ -201,18 +203,6 @@ void copy_rgb565_rows_to_canvas(const uint16_t *pixels, int x, int y, int width,
 
 extern "C" int sailfish_canvas_width()  { return g_canvas_width; }
 extern "C" int sailfish_canvas_height() { return g_canvas_height; }
-
-extern "C" int sailfish_display_finger_to_logical(float nx, float ny, float *x, float *y)
-{
-	if (!g_sdl_ok || !g_window || !g_renderer || !x || !y) return 0;
-	int window_width = 0;
-	int window_height = 0;
-	SDL_GetWindowSize(g_window, &window_width, &window_height);
-	if (window_width <= 0 || window_height <= 0) return 0;
-	SDL_RenderWindowToLogical(g_renderer, static_cast<int>(nx * window_width),
-	                          static_cast<int>(ny * window_height), x, y);
-	return 1;
-}
 
 // Returns 1 (and clears the flag) if a present blocked on vsync since the last
 // call — the main loop uses this to avoid double-pacing (its own nanosleep on
