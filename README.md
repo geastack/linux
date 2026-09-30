@@ -8,14 +8,14 @@ desktop apps. Apps render through the shared gea framework raster pipeline
 window, with mouse, touchscreen (multi-touch), keyboard, and scroll-wheel
 input mapped onto the framework input pipelines, plus persistent
 `localStorage` (file-backed) and HTTP(S) `fetch` (libcurl). The
-current focus is Raspberry Pi OS on the Raspberry Pi 5; other distros can be
-added as sibling targets.
+targets include Raspberry Pi OS on the Raspberry Pi 5 and Sailfish OS.
 
 ## What Is Here
 
 | Path | Purpose |
 | --- | --- |
 | `targets/raspberry-pi-os` | Raspberry Pi OS (Bookworm+ desktop, labwc/Wayland) SDL2 target: platform sources, build script, and target docs. |
+| `targets/sailfish-os` | Sailfish OS 5.1 target: its own platform sources, host code generation, portable CMake project, and i486 RPM packaging. |
 
 ## Quick Start
 
@@ -31,6 +31,9 @@ scrolls; the keyboard types into focused inputs; F11 toggles fullscreen; Esc
 or closing the window quits. See
 [targets/raspberry-pi-os/README.md](targets/raspberry-pi-os/README.md) for
 window size/scale/DPR/storage knobs and target architecture.
+
+For Sailfish OS, use the standalone Bash or PowerShell build script described in
+[targets/sailfish-os/README.md](targets/sailfish-os/README.md).
 
 ## Dependencies
 
