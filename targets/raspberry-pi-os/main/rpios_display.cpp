@@ -99,6 +99,7 @@ void ensure_window()
 {
 	if (g_sdl_ok) return;
 	ensure_canvas();
+	if (!g_framebuffer) return;
 	static bool attempted = false;
 	if (attempted) return;
 	attempted = true;

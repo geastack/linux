@@ -97,6 +97,7 @@ void ensure_window()
 {
 	if (g_sdl_ok) return;
 	ensure_canvas();
+	if (!g_framebuffer) return;
 	static bool attempted = false;
 	if (attempted) return;
 	attempted = true;
@@ -200,6 +201,18 @@ void copy_rgb565_rows_to_canvas(const uint16_t *pixels, int x, int y, int width,
 
 extern "C" int sailfish_canvas_width()  { return g_canvas_width; }
 extern "C" int sailfish_canvas_height() { return g_canvas_height; }
+
+extern "C" int sailfish_display_finger_to_logical(float nx, float ny, float *x, float *y)
+{
+	if (!g_sdl_ok || !g_window || !g_renderer || !x || !y) return 0;
+	int window_width = 0;
+	int window_height = 0;
+	SDL_GetWindowSize(g_window, &window_width, &window_height);
+	if (window_width <= 0 || window_height <= 0) return 0;
+	SDL_RenderWindowToLogical(g_renderer, static_cast<int>(nx * window_width),
+	                          static_cast<int>(ny * window_height), x, y);
+	return 1;
+}
 
 // Returns 1 (and clears the flag) if a present blocked on vsync since the last
 // call — the main loop uses this to avoid double-pacing (its own nanosleep on

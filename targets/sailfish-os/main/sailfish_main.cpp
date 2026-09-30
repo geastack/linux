@@ -60,6 +60,7 @@ extern "C" void sailfish_display_present();
 extern "C" void sailfish_display_toggle_fullscreen();
 extern "C" int sailfish_display_window_scale();
 extern "C" int sailfish_display_resize(int new_width, int new_height);
+extern "C" int sailfish_display_finger_to_logical(float nx, float ny, float *x, float *y);
 extern "C" int gea_embedded_apps_launch(const char *app_id);
 extern "C" void sailfish_runtime_storage_load();
 extern "C" void sailfish_runtime_storage_flush();
@@ -153,10 +154,12 @@ int fingerSlot(SDL_FingerID id, bool allocate)
 
 void injectFinger(gea::platform::touch::Phase phase, bool touching, float nx, float ny, int pointerId)
 {
-	// tfinger coords are normalized; the renderer's logical-size event watch
-	// keeps them proportional to the logical canvas.
-	int x = (int)(nx * (float)sailfish_canvas_width());
-	int y = (int)(ny * (float)sailfish_canvas_height());
+	// Finger coordinates are normalized to the window, including letterbox bars.
+	float logicalX = 0.0f;
+	float logicalY = 0.0f;
+	if (!sailfish_display_finger_to_logical(nx, ny, &logicalX, &logicalY)) return;
+	int x = (int)logicalX;
+	int y = (int)logicalY;
 	const int maxX = sailfish_canvas_width() - 1;
 	const int maxY = sailfish_canvas_height() - 1;
 	if (x < 0) x = 0;
