@@ -43,6 +43,7 @@
 #include "ui/style.h"
 #include "ui/tree_internal.h"
 #include "touch.h"
+#include "sailfish_keyboard.h"
 
 #include <SDL2/SDL.h>
 
@@ -64,6 +65,8 @@ extern "C" void sailfish_display_present();
 extern "C" void sailfish_display_toggle_fullscreen();
 extern "C" int sailfish_display_window_scale();
 extern "C" int sailfish_display_resize(int new_width, int new_height);
+extern "C" void sailfish_window_size(int *width, int *height);
+extern "C" void sailfish_window_to_canvas(int window_x, int window_y, int *canvas_x, int *canvas_y);
 extern "C" int gea_embedded_apps_launch(const char *app_id);
 extern "C" void sailfish_runtime_storage_load();
 extern "C" void sailfish_runtime_storage_flush();
@@ -111,21 +114,13 @@ bool g_resize_pending = false;  // window size changed — apply before next fra
 int g_resize_window_w = 0;
 int g_resize_window_h = 0;
 
-// Inject an SDL mouse position as a touch. SDL mouse-event coordinates are
-// ALREADY in logical/canvas space: SDL_RenderSetLogicalSize installs a
-// renderer event watch that rewrites SDL_MOUSEMOTION/BUTTON coordinates into
-// the logical coordinate system. Do NOT call SDL_RenderWindowToLogical here —
-// that scales a second time and lands every touch at half the true position
-// (found via a uinput-verified drag that hit-tested at ~(126,185) when the
-// cursor sat at logical (254,387)).
-void injectMouse(gea::platform::touch::Phase phase, bool touching, int x, int y)
+// Mouse, finger, and wheel positions are window points. sailfish_window_to_canvas
+// is the only conversion into canvas pixels (the hit-test space).
+void injectMouse(gea::platform::touch::Phase phase, bool touching, int windowX, int windowY)
 {
-	const int maxX = sailfish_canvas_width() - 1;
-	const int maxY = sailfish_canvas_height() - 1;
-	if (x < 0) x = 0;
-	if (y < 0) y = 0;
-	if (x > maxX) x = maxX;
-	if (y > maxY) y = maxY;
+	int x = 0;
+	int y = 0;
+	sailfish_window_to_canvas(windowX, windowY, &x, &y);
 	gea::platform::touch::Touchscreen::injectEvent(phase, touching, x, y);
 }
 
@@ -157,16 +152,14 @@ int fingerSlot(SDL_FingerID id, bool allocate)
 
 void injectFinger(gea::platform::touch::Phase phase, bool touching, float nx, float ny, int pointerId)
 {
-	// SDL_RenderSetLogicalSize's event watch already normalizes finger events
-	// to the logical viewport, including letterbox offsets. Scale only once.
-	int x = (int)(nx * (float)sailfish_canvas_width());
-	int y = (int)(ny * (float)sailfish_canvas_height());
-	const int maxX = sailfish_canvas_width() - 1;
-	const int maxY = sailfish_canvas_height() - 1;
-	if (x < 0) x = 0;
-	if (y < 0) y = 0;
-	if (x > maxX) x = maxX;
-	if (y > maxY) y = maxY;
+	// SDL finger coordinates are normalized across the window. Turn them into
+	// window points, then use the same window-to-canvas mapping as the mouse.
+	int windowW = 1;
+	int windowH = 1;
+	sailfish_window_size(&windowW, &windowH);
+	int x = 0;
+	int y = 0;
+	sailfish_window_to_canvas((int)(nx * (float)windowW), (int)(ny * (float)windowH), &x, &y);
 	gea::framework::events::TouchRuntime::queueTouchEvent(
 	    static_cast<gea::framework::events::TouchPhase>(phase), touching, x, y, pointerId);
 }
@@ -213,9 +206,68 @@ void markNodeFullyDirty(gea::embedded::ui::Tree &tree, int nodeId)
 	node.render.non_scroll_dirty = 1;
 }
 
-// Physical-keyboard text entry: mutate the focused <input>'s value attribute
-// and fire the synthetic input/keydown events, mirroring what the on-screen
-// virtual keyboard does for taps. Returns false when no input is focused.
+// Well-formed UTF-8 sequence length at p, or 0 when the bytes are not a single
+// Unicode scalar value. Overlong encodings and surrogates are rejected.
+int utf8SequenceLength(const unsigned char *p, const unsigned char *end)
+{
+	if (p >= end) return 0;
+	const unsigned char lead = *p;
+	int need = 0;
+	std::uint32_t codePoint = 0;
+	if (lead < 0x80) return 1;
+	if ((lead & 0xE0) == 0xC0) { need = 2; codePoint = lead & 0x1F; }
+	else if ((lead & 0xF0) == 0xE0) { need = 3; codePoint = lead & 0x0F; }
+	else if ((lead & 0xF8) == 0xF0) { need = 4; codePoint = lead & 0x07; }
+	else return 0;
+	if (p + need > end) return 0;
+	for (int i = 1; i < need; i++) {
+		if ((p[i] & 0xC0) != 0x80) return 0;
+		codePoint = (codePoint << 6) | (p[i] & 0x3F);
+	}
+	if (need == 2 && codePoint < 0x80) return 0;
+	if (need == 3 && codePoint < 0x800) return 0;
+	if (need == 4 && codePoint < 0x10000) return 0;
+	if (codePoint > 0x10FFFF || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) return 0;
+	return need;
+}
+
+void appendUtf8(std::string &dest, const char *utf8)
+{
+	if (!utf8 || !*utf8) return;
+	const auto *p = reinterpret_cast<const unsigned char *>(utf8);
+	const auto *end = p + std::strlen(utf8);
+	while (p < end) {
+		const int length = utf8SequenceLength(p, end);
+		if (length <= 0) {
+			p++;
+			continue;
+		}
+		dest.append(reinterpret_cast<const char *>(p), static_cast<size_t>(length));
+		p += length;
+	}
+}
+
+// Deletes the last Unicode code point. Trailing UTF-8 continuation bytes
+// (10xxxxxx) are dropped first, then the lead byte. A grapheme cluster made of
+// several code points is not collapsed; one code point meets the Sailfish
+// text-input requirement, including ç ğ ı İ ö ş ü.
+void popUtf8CodePoint(std::string &text)
+{
+	while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80)
+		text.pop_back();
+	if (!text.empty()) text.pop_back();
+}
+
+void dispatchInputEvent(gea::embedded::ui::Tree &tree, int activeId)
+{
+	gea::framework::events::PointerEvent ev{};
+	ev.type = gea::framework::events::PointerEventType::Input;
+	ev.targetId = activeId;
+	tree.dispatchEvent(ev);
+}
+
+// Shared by SDL_TEXTINPUT and the Maliit commit-string path. Returns false
+// when no input is focused. Valid UTF-8 is inserted whole; ASCII is unchanged.
 bool appendTextToActiveInput(const char *utf8)
 {
 	auto &tree = gea::embedded::ui::Tree::instance();
@@ -224,22 +276,12 @@ bool appendTextToActiveInput(const char *utf8)
 
 	const char *currentValue = tree.getAttribute(activeId, "value");
 	std::string next = currentValue ? std::string(currentValue) : std::string();
-	bool changed = false;
-	for (const char *p = utf8; *p; p++) {
-		// ASCII printable only — the raster pipeline's fonts cover ASCII.
-		if (*p >= 32 && *p < 127) {
-			next.push_back(*p);
-			changed = true;
-		}
-	}
-	if (!changed) return true;
+	const size_t before = next.size();
+	appendUtf8(next, utf8);
+	if (next.size() == before) return true;
 	tree.setAttribute(activeId, "value", next.c_str());
 	markNodeFullyDirty(tree, activeId);
-
-	gea::framework::events::PointerEvent ev{};
-	ev.type = gea::framework::events::PointerEventType::Input;
-	ev.targetId = activeId;
-	tree.dispatchEvent(ev);
+	dispatchInputEvent(tree, activeId);
 	return true;
 }
 
@@ -252,13 +294,10 @@ bool applyBackspaceToActiveInput()
 	const char *currentValue = tree.getAttribute(activeId, "value");
 	std::string next = currentValue ? std::string(currentValue) : std::string();
 	if (!next.empty()) {
-		next.pop_back();
+		popUtf8CodePoint(next);
 		tree.setAttribute(activeId, "value", next.c_str());
 		markNodeFullyDirty(tree, activeId);
-		gea::framework::events::PointerEvent ev{};
-		ev.type = gea::framework::events::PointerEventType::Input;
-		ev.targetId = activeId;
-		tree.dispatchEvent(ev);
+		dispatchInputEvent(tree, activeId);
 	}
 	gea::framework::events::PointerEvent kd{};
 	kd.type = gea::framework::events::PointerEventType::KeyDown;
@@ -266,6 +305,29 @@ bool applyBackspaceToActiveInput()
 	kd.keyCode = 8;
 	tree.dispatchEvent(kd);
 	return true;
+}
+
+// Enter from a hardware key and from Maliit (Qt::Key_Return / Qt::Key_Enter)
+// both queue web keyCode 13, which dispatchKeyInput delivers to the focused input.
+bool applyEnterToActiveInput()
+{
+	auto &tree = gea::embedded::ui::Tree::instance();
+	if (tree.activeInputId() < 0) return false;
+	gea::framework::input::queueKeyDown(13);
+	return true;
+}
+
+bool clearActiveInputFocus()
+{
+	gea::embedded::ui::Tree::instance().setActiveInput(-1);
+	return true;
+}
+
+void keepFocusedInputVisible(int, int, int, int)
+{
+	auto &tree = gea::embedded::ui::Tree::instance();
+	const int activeId = tree.activeInputId();
+	if (activeId >= 0) tree.scrollIntoView(activeId);
 }
 
 // ---- per-frame input drains (mirrors core/runtime.cpp, which this target
@@ -323,10 +385,11 @@ void pumpSdlEvents()
 				sailfish_display_toggle_fullscreen();
 				break;
 			}
-			// Backspace/Enter on a focused <input> take the virtual-keyboard
-			// path (value mutation + synthetic events); everything else is
-			// queued as a web keyCode and drained by dispatchKeyInput.
+			// Backspace and Enter on a focused <input> use the same helpers as
+			// the Sailfish system keyboard. Everything else is queued as a
+			// web keyCode and drained by dispatchKeyInput.
 			if (sym == SDLK_BACKSPACE && applyBackspaceToActiveInput()) break;
+			if ((sym == SDLK_RETURN || sym == SDLK_KP_ENTER) && applyEnterToActiveInput()) break;
 			const int keyCode = webKeyCodeForSdl(sym);
 			if (keyCode != 0) gea::framework::input::queueKeyDown(keyCode);
 			break;
@@ -342,13 +405,21 @@ void pumpSdlEvents()
 			int notches = event.wheel.y;
 			if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) notches = -notches;
 			if (notches != 0) {
+				int canvasX = 0;
+				int canvasY = 0;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+				sailfish_window_to_canvas(event.wheel.mouseX, event.wheel.mouseY, &canvasX, &canvasY);
+#else
+				sailfish_window_to_canvas(0, 0, &canvasX, &canvasY);
+#endif
 				// Wheel-up (notches > 0) scrolls toward the top: negative dy.
 				const bool scrolled = gea::embedded::ui::Tree::instance().scrollByKeyStep(-notches * 48);
 				// Also surface it as rotary detents for apps that listen
 				// (knob-first apps from the elecrow rotary board).
 				gea::framework::input::queueRotaryDelta(-notches);
 				if (inputTrace)
-					std::fprintf(stderr, "[sailfish.input] wheel notches=%d scrolled=%d\n", notches, scrolled ? 1 : 0);
+					std::fprintf(stderr, "[sailfish.input] wheel notches=%d scrolled=%d canvas=%d,%d\n",
+					             notches, scrolled ? 1 : 0, canvasX, canvasY);
 			}
 			break;
 		}
@@ -525,8 +596,12 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "[sailfish] touch input unavailable\n");
 	}
 
-	// Physical-keyboard text entry for focused <input> nodes (SDL_TEXTINPUT).
+	// Hardware and emulator keyboards still arrive as SDL_TEXTINPUT. The Gea
+	// on-screen keyboard is compiled out; a Sailfish device uses Maliit.
 	SDL_StartTextInput();
+	sailfish_keyboard_init(appendTextToActiveInput, applyBackspaceToActiveInput,
+	                       applyEnterToActiveInput, clearActiveInputFocus,
+	                       keepFocusedInputVisible);
 
 	auto &tree = gea::embedded::ui::Tree::instance();
 
@@ -546,6 +621,7 @@ int main(int argc, char **argv)
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 
 		pumpSdlEvents();
+		sailfish_keyboard_pump();
 
 		// Minimized/hidden: keep pumping events (so quit works) but skip
 		// frames entirely; input dispatch is gated off in setPaused.
@@ -571,12 +647,25 @@ int main(int argc, char **argv)
                 gea::embedded::ui::dispatchWindowLifecycleEvent(gea::framework::events::PointerEventType::WindowResize);
 				const int count = tree.nodeCount();
 				for (int id = 0; id < count; ++id) markNodeFullyDirty(tree, id);
+				// The Sailfish keyboard shrinks the window. Scroll the focused
+				// field back into the new viewport once layout runs.
+				if (tree.activeInputId() >= 0) tree.scrollIntoView(tree.activeInputId());
 				std::fprintf(stderr, "[sailfish] resized to %dx%d (window %dx%d)\n",
 				             w, h, g_resize_window_w, g_resize_window_h);
 			}
 		}
 
 		dispatchPendingEvents();
+		{
+			static int lastFocusedInput = -1;
+			const int focusedInput = tree.activeInputId();
+			const char *inputType = focusedInput >= 0 ? tree.getAttribute(focusedInput, "type") : nullptr;
+			sailfish_keyboard_update(focusedInput, inputType);
+			if (focusedInput != lastFocusedInput) {
+				lastFocusedInput = focusedInput;
+				if (focusedInput >= 0) tree.scrollIntoView(focusedInput);
+			}
+		}
 
 		struct timespec t_af0;
 		clock_gettime(CLOCK_MONOTONIC, &t_af0);

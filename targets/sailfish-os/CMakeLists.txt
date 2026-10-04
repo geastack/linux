@@ -10,6 +10,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+# Harbour allows libgio/libglib/libgobject and does not allow libmaliit-glib.
+# The system keyboard uses those GIO libraries to speak Maliit's D-Bus API.
+# See targets/sailfish-os/README.md.
+pkg_check_modules(SAILFISH_GLIB REQUIRED IMPORTED_TARGET glib-2.0 gobject-2.0 gio-2.0)
 include(${CMAKE_CURRENT_SOURCE_DIR}/sources.cmake)
 
 add_executable(${GEA_PACKAGE_NAME} ${GEA_C_SOURCES} ${GEA_CXX_SOURCES})
@@ -20,6 +24,7 @@ target_compile_options(${GEA_PACKAGE_NAME} PRIVATE
 target_compile_definitions(${GEA_PACKAGE_NAME} PRIVATE
   GEA_EMBEDDED_HAS_GENERATED_FONTS=1
   GEA_EMBEDDED_TTF_RUNTIME_FONTS=1
+  GEA_EMBEDDED_ENABLE_VIRTUAL_KEYBOARD=0
   $<$<COMPILE_LANGUAGE:C>:GEA_EMBEDDED_GIF_C_API>
   GEA_SAILFISH_APP_ID="${GEA_APP_ID}"
   GEA_SAILFISH_APP_TITLE="${GEA_APP_TITLE}"
@@ -27,7 +32,12 @@ target_compile_definitions(${GEA_PACKAGE_NAME} PRIVATE
   GEA_SAILFISH_APPLICATION_NAME="${GEA_SAILFISH_APPLICATION_NAME}")
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/main/sailfish_main.cpp
   PROPERTIES COMPILE_DEFINITIONS GEA_SAILFISH_DEFAULT_DPR=${GEA_SAILFISH_DEFAULT_DPR})
-target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL pthread m rt)
+target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL PkgConfig::SAILFISH_GLIB pthread m rt)
+foreach(GEA_APP_LIBRARY ${GEA_APP_LIBRARIES})
+  string(MAKE_C_IDENTIFIER "gea_app_${GEA_APP_LIBRARY}" GEA_APP_LIBRARY_TARGET)
+  pkg_check_modules(${GEA_APP_LIBRARY_TARGET} REQUIRED IMPORTED_TARGET ${GEA_APP_LIBRARY})
+  target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::${GEA_APP_LIBRARY_TARGET})
+endforeach()
 target_link_options(${GEA_PACKAGE_NAME} PRIVATE -Wl,--export-dynamic)
 
 install(TARGETS ${GEA_PACKAGE_NAME} RUNTIME DESTINATION bin)

@@ -8,9 +8,10 @@ ARCH=i486
 CORE_REPO=""
 SFDK_BIN="${SFDK_BIN:-sfdk}"
 PREPARE_ONLY=0
+CLEAN=0
 
 usage() {
-  echo "usage: $0 <app-directory> [--arch i486|armv7hl|aarch64] [--core-repo path] [--sfdk path] [--prepare-only]" >&2
+  echo "usage: $0 <app-directory> [--arch i486|armv7hl|aarch64] [--core-repo path] [--sfdk path] [--prepare-only] [--clean]" >&2
 }
 
 while (($#)); do
@@ -25,6 +26,7 @@ while (($#)); do
       shift 2
       ;;
     --prepare-only) PREPARE_ONLY=1; shift ;;
+    --clean) CLEAN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) usage; exit 2 ;;
     *)
@@ -53,5 +55,22 @@ if [[ "$SFDK_BIN" == */* ]]; then
 fi
 command -v "$SFDK_BIN" >/dev/null || { echo "sfdk not found: $SFDK_BIN" >&2; exit 1; }
 APP_ID="$(node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(p.gea.id)' "$APP_DIR/package.json")"
-PROJECT_DIR="$TARGET_DIR/build/$APP_ID-$ARCH/project"
-(cd "$PROJECT_DIR" && "$SFDK_BIN" -c "target=SailfishOS-5.1.0.11-$ARCH" build)
+PROJECT_DIR="$APP_DIR/.gea-sailfish/build/$APP_ID-$ARCH/project"
+RECOVER=(node "$TARGET_DIR/recover-build.mjs" "$PROJECT_DIR")
+if ((CLEAN)); then RECOVER+=(--clean); fi
+"${RECOVER[@]}"
+LOG="$(mktemp)"
+set +e
+(cd "$PROJECT_DIR" && "$SFDK_BIN" -c "target=SailfishOS-5.1.0.11-$ARCH" build) 2>&1 | tee "$LOG"
+SFDK_CODE=${PIPESTATUS[0]}
+set -e
+if ((SFDK_CODE != 0)); then
+  LAST_ERROR="$(grep -E 'error:|undefined reference|fatal error:|Error [0-9]' "$LOG" | tail -n 1 || true)"
+  if [[ -n "$LAST_ERROR" ]]; then
+    echo "sfdk build failed (exit $SFDK_CODE): $LAST_ERROR" >&2
+  else
+    echo "sfdk build failed (exit $SFDK_CODE)" >&2
+  fi
+fi
+rm -f "$LOG"
+exit "$SFDK_CODE"
