@@ -33,10 +33,13 @@ target_compile_definitions(${GEA_PACKAGE_NAME} PRIVATE
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/main/sailfish_main.cpp
   PROPERTIES COMPILE_DEFINITIONS GEA_SAILFISH_DEFAULT_DPR=${GEA_SAILFISH_DEFAULT_DPR})
 target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL PkgConfig::SAILFISH_GLIB pthread m rt)
+set(GEA_APP_LIBRARY_INDEX 0)
 foreach(GEA_APP_LIBRARY ${GEA_APP_LIBRARIES})
-  string(MAKE_C_IDENTIFIER "gea_app_${GEA_APP_LIBRARY}" GEA_APP_LIBRARY_TARGET)
+  # foo-bar and foo.bar both become foo_bar; the index keeps each imported target distinct.
+  string(MAKE_C_IDENTIFIER "gea_app_${GEA_APP_LIBRARY_INDEX}_${GEA_APP_LIBRARY}" GEA_APP_LIBRARY_TARGET)
   pkg_check_modules(${GEA_APP_LIBRARY_TARGET} REQUIRED IMPORTED_TARGET ${GEA_APP_LIBRARY})
   target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::${GEA_APP_LIBRARY_TARGET})
+  math(EXPR GEA_APP_LIBRARY_INDEX "${GEA_APP_LIBRARY_INDEX} + 1")
 endforeach()
 target_link_options(${GEA_PACKAGE_NAME} PRIVATE -Wl,--export-dynamic)
 
