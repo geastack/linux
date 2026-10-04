@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import sharp from 'sharp'
 import {
   appRelative, assertPackageVersion, frameworkPackageNames, nativeKind,
-  readPackageVersion, resolveGeastackPackage, validateLibraryName,
+  readPackageVersion, resolveGeastackPackage, shouldCopyStagedPath, validateLibraryName,
 } from './prepare-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -84,8 +84,8 @@ const allowedParent = path.resolve(workRoot, 'build') + path.sep
 if (!resolvedStage.startsWith(allowedParent)) throw new Error('unsafe stage directory')
 fs.rmSync(stage, { recursive: true, force: true })
 fs.mkdirSync(stage, { recursive: true })
-const copyTree = (from, to) => fs.cpSync(from, to, { recursive: true,
-  filter: (item) => !['.git', 'node_modules', 'dist', 'build', 'test', 'tests', '.build-test'].includes(path.basename(item)) })
+const copyTree = (from, to, keepRoot = false) => fs.cpSync(from, to, { recursive: true,
+  filter: (item) => shouldCopyStagedPath(item, keepRoot ? from : '') })
 for (const name of frameworkPackageNames()) {
   const source = frameworkSource(name)
   if (!fs.existsSync(source)) throw new Error(`missing @geastack/${name}: ${source}`)
@@ -112,7 +112,7 @@ for (const rel of includePaths) {
   const abs = appRelative(appDir, rel)
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) throw new Error(`gea.sailfish.includePaths directory missing: ${rel}`)
   const dest = path.join(nativeRoot, rel)
-  copyTree(abs, dest)
+  copyTree(abs, dest, true)
   stagedIncludes.push(`app_native/${rel.replaceAll('\\', '/')}`)
 }
 

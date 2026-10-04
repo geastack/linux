@@ -5,7 +5,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
-  appRelative, assertPackageVersion, nativeKind, resolveGeastackPackage, validateLibraryName,
+  appRelative, assertPackageVersion, nativeKind, resolveGeastackPackage, shouldCopyStagedPath, validateLibraryName,
 } from './prepare-lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -30,22 +30,52 @@ assert.throws(() => nativeKind('native/host.ts'), /must be C, C\+\+, or headers/
 assert.equal(validateLibraryName('openssl'), 'openssl')
 assert.throws(() => validateLibraryName('pkg;rm'), /pkg-config module names/)
 
+const includeRoot = path.join(root, 'dist')
+fs.mkdirSync(path.join(includeRoot, 'nested', 'dist'), { recursive: true })
+fs.writeFileSync(path.join(includeRoot, 'vendor.h'), 'vendor')
+fs.writeFileSync(path.join(includeRoot, 'nested', 'inside.h'), 'inside')
+fs.writeFileSync(path.join(includeRoot, 'nested', 'dist', 'skipped.h'), 'skip')
+const copiedInclude = path.join(root, 'copied-include')
+fs.cpSync(includeRoot, copiedInclude, { recursive: true, filter: (item) => shouldCopyStagedPath(item, includeRoot) })
+assert.equal(fs.readFileSync(path.join(copiedInclude, 'vendor.h'), 'utf8'), 'vendor')
+assert.equal(fs.readFileSync(path.join(copiedInclude, 'nested', 'inside.h'), 'utf8'), 'inside')
+assert.equal(fs.existsSync(path.join(copiedInclude, 'nested', 'dist')), false)
+const frameworkDist = path.join(root, 'framework', 'dist')
+assert.equal(shouldCopyStagedPath(frameworkDist), false)
+assert.equal(shouldCopyStagedPath(path.join(root, 'framework', 'src', 'a.h')), true)
+
 const project = path.join(root, 'project')
 fs.mkdirSync(project, { recursive: true })
 fs.writeFileSync(path.join(project, 'empty.o'), '')
 fs.writeFileSync(path.join(project, 'text.o'), 'not an object')
 fs.writeFileSync(path.join(project, 'real.o'), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3, 4]))
+const complete = Buffer.alloc(52)
+complete.set([0x7f, 0x45, 0x4c, 0x46, 1, 1, 1])
+complete.writeUInt16LE(1, 16)
+complete.writeUInt16LE(3, 18)
+complete.writeUInt32LE(1, 20)
+complete.writeUInt16LE(52, 40)
+fs.writeFileSync(path.join(project, 'complete.o'), complete)
+const truncated = Buffer.alloc(52)
+complete.copy(truncated)
+truncated.writeUInt32LE(52, 32)
+truncated.writeUInt16LE(40, 46)
+truncated.writeUInt16LE(1, 48)
+fs.writeFileSync(path.join(project, 'truncated.o'), truncated)
 const recover = spawnSync(process.execPath, [path.join(here, 'recover-build.mjs'), project], { encoding: 'utf8' })
 assert.equal(recover.status, 0)
 assert.equal(fs.existsSync(path.join(project, 'empty.o')), false)
 assert.equal(fs.existsSync(path.join(project, 'text.o')), false)
-assert.equal(fs.existsSync(path.join(project, 'real.o')), true)
+assert.equal(fs.existsSync(path.join(project, 'real.o')), false)
+assert.equal(fs.existsSync(path.join(project, 'truncated.o')), false)
+assert.equal(fs.existsSync(path.join(project, 'complete.o')), true)
 fs.mkdirSync(path.join(project, 'RPMS'), { recursive: true })
 fs.writeFileSync(path.join(project, 'RPMS', 'app.rpm'), 'rpm')
 const cleaned = spawnSync(process.execPath, [path.join(here, 'recover-build.mjs'), project, '--clean'], { encoding: 'utf8' })
 assert.equal(cleaned.status, 0)
 assert.equal(fs.existsSync(path.join(project, 'RPMS')), false)
 assert.equal(fs.existsSync(path.join(project, 'real.o')), false)
+assert.equal(fs.existsSync(path.join(project, 'complete.o')), false)
 
 fs.rmSync(root, { recursive: true, force: true })
 console.log('sailfish prepare tests passed')

@@ -30,14 +30,44 @@ function walk(dir, files) {
   }
 }
 
+function readElfNumber(buf, offset, bytes, little) {
+  if (bytes === 2) return little ? buf.readUInt16LE(offset) : buf.readUInt16BE(offset)
+  if (bytes === 4) return little ? buf.readUInt32LE(offset) : buf.readUInt32BE(offset)
+  const value = little ? buf.readBigUInt64LE(offset) : buf.readBigUInt64BE(offset)
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : -1
+}
+
+function elfTableFits(fileSize, offset, count, entrySize) {
+  if (offset < 0 || offset > fileSize) return false
+  if (count === 0) return true
+  if (entrySize <= 0) return false
+  return count <= Math.floor((fileSize - offset) / entrySize)
+}
+
 function isElfObject(file) {
   const stat = fs.statSync(file)
-  if (!stat.isFile() || stat.size < 4) return false
+  // A complete ELF header is 52 bytes (32-bit) or 64 bytes (64-bit). Magic alone is truncated.
+  if (!stat.isFile() || stat.size < 52) return false
   const fd = fs.openSync(file, 'r')
   try {
-    const header = Buffer.alloc(4)
-    if (fs.readSync(fd, header, 0, 4, 0) !== 4) return false
-    return header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46
+    const header = Buffer.alloc(64)
+    const bytes = fs.readSync(fd, header, 0, Math.min(header.length, stat.size), 0)
+    if (header[0] !== 0x7f || header[1] !== 0x45 || header[2] !== 0x4c || header[3] !== 0x46) return false
+    const elfClass = header[4]
+    const elfData = header[5]
+    const little = elfData === 1
+    if ((elfClass !== 1 && elfClass !== 2) || (elfData !== 1 && elfData !== 2) || header[6] !== 1) return false
+    const headerSize = elfClass === 2 ? 64 : 52
+    if (bytes < headerSize) return false
+    if (readElfNumber(header, elfClass === 2 ? 52 : 40, 2, little) !== headerSize) return false
+    const wide = elfClass === 2
+    const phoff = readElfNumber(header, wide ? 32 : 28, wide ? 8 : 4, little)
+    const shoff = readElfNumber(header, wide ? 40 : 32, wide ? 8 : 4, little)
+    const phentsize = readElfNumber(header, wide ? 54 : 42, 2, little)
+    const phnum = readElfNumber(header, wide ? 56 : 44, 2, little)
+    const shentsize = readElfNumber(header, wide ? 58 : 46, 2, little)
+    const shnum = readElfNumber(header, wide ? 60 : 48, 2, little)
+    return elfTableFits(stat.size, phoff, phnum, phentsize) && elfTableFits(stat.size, shoff, shnum, shentsize)
   } finally {
     fs.closeSync(fd)
   }

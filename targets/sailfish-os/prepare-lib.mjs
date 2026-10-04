@@ -2,6 +2,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const frameworkPackages = ['core', 'host', 'engine', 'elements', 'geaos']
+const stagedCopyExcluded = new Set(['.git', 'node_modules', 'dist', 'build', 'test', 'tests', '.build-test'])
+
+export function shouldCopyStagedPath(sourcePath, copiedRoot = '') {
+  if (copiedRoot && path.resolve(sourcePath) === path.resolve(copiedRoot)) return true
+  return !stagedCopyExcluded.has(path.basename(sourcePath))
+}
 
 export function frameworkPackageNames() {
   return frameworkPackages
