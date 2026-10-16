@@ -84,7 +84,8 @@ const env = Object.fromEntries(['core', 'host', 'engine', 'elements', 'geaos'].m
 const { includeFlags, cSources, cxxSources } = await import(pathToFileURL(path.join(coreRepo, 'packages/core/gea_sources.mjs')))
 const rel = (file) => path.relative(stage, file).replaceAll('\\', '/')
 const c = [...cSources(env).map(rel), 'platform/main/sailfish_apps.c']
-const cxx = cxxSources(env).filter((s) => !/\/(?:host\/camera|runtime|services\/[a-z_]+)\.cpp$/.test(s)).map(rel)
+const cxx = cxxSources({ ...env, GEA_DESKTOP_WEBSOCKET_CURL: '1' }).filter((s) => !/\/(?:host\/camera|runtime|services\/[a-z_]+)\.cpp$/.test(s)).map(rel)
+if (!cxx.some((s) => s.endsWith('/host/websocket_curl.cpp'))) throw new Error('framework does not provide the native Linux WebSocket transport')
 for (const name of ['display', 'audio', 'memory', 'network', 'sensors', 'storage', 'storage_bridge', 'timers', 'app_platform', 'main']) cxx.push(`platform/main/sailfish_${name}.cpp`)
 cxx.push('framework/core/gea_app_entry.cpp')
 for (const line of fs.readFileSync(path.join(generated, 'geatsc-sources.txt'), 'utf8').split(/\r?\n/).filter(Boolean)) {

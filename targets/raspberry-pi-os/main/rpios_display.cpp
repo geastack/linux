@@ -235,6 +235,8 @@ extern "C" void rpios_display_toggle_fullscreen()
 }
 
 extern "C" int rpios_display_window_scale() { return g_window_scale; }
+extern "C" Uint32 rpios_display_window_id() { return g_window ? SDL_GetWindowID(g_window) : 0; }
+extern "C" bool rpios_display_keyboard_focus() { return g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS); }
 
 // Rebuild the framebuffer + streaming texture at a new logical size (window
 // resized or fullscreen toggled). The canvas rebinds to the new buffer; the
@@ -434,6 +436,9 @@ void Display::drawTextFontFamily(const char *text, int x, int y, uint16_t color,
 {
 	ensure_canvas();
 	g_canvas.drawTextFontFamily(text, x, y, color, family_id, size_px);
+}
+void Display::drawTextFontFamily(const char *text,int x,int y,uint16_t color,int family,int size,int weight,int stretch) {
+ ensure_canvas();g_canvas.drawTextFontFamily(text,x,y,color,family,size,weight,stretch);
 }
 void Display::setPixel(int x, int y, uint16_t color) { ensure_canvas(); g_canvas.fillRect(x, y, 1, 1, color); }
 void Display::fillRoundedRect(int x, int y, int w, int h, int tl, int tr, int br, int bl, uint16_t color) { ensure_canvas(); g_canvas.fillRoundedRect(x, y, w, h, tl, tr, br, bl, color); }

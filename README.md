@@ -19,16 +19,28 @@ targets include Raspberry Pi OS on the Raspberry Pi 5 and Sailfish OS.
 
 ## Quick Start
 
-Build and run an app:
+Declare `gea.targets["raspberry-pi-os"]: true` and depend on
+`@geastack/linux`. From the app directory, build the real native SDL target:
 
 ```sh
-targets/raspberry-pi-os/build-raspberry-pi-os.sh bouncing-balls-jsx
-./targets/raspberry-pi-os/dist/bouncing-balls-jsx/bouncing-balls-jsx
+gea build --target raspberry-pi-os <app-id>
 ```
+
+This command only builds; it never launches or deploys. The executable is
+`dist/raspberry-pi-os/<app-id>/<app-id>` under the app. It uses the shared
+compiler and raster renderer, with no browser fallback.
+
+For an AArch64 cross build, provide `CC`/`CXX` (Clang), absolute
+`GEA_LINUX_SYSROOT` with GCC14 target libraries, staged development roots
+`GEA_LINUX_SDL_ROOT` and `GEA_LINUX_CURL_ROOT`, and matching runtime files
+`GEA_LINUX_SDL_LIBRARY` and `GEA_LINUX_CURL_LIBRARY`. These inputs are explicit;
+the target does not install packages or modify a sysroot. `GEA_BUILD_JOBS`
+bounds compilation to 1–16 jobs (default 2). `GEA_LINUX_ROOT` selects a local
+package checkout when developing the CLI/target together.
 
 Click and drag with the mouse (it acts as the touch finger); the wheel
 scrolls; the keyboard types into focused inputs; F11 toggles fullscreen; Esc
-or closing the window quits. See
+is delivered to the app as a normal key; closing the window quits. See
 [targets/raspberry-pi-os/README.md](targets/raspberry-pi-os/README.md) for
 window size/scale/DPR/storage knobs and target architecture.
 

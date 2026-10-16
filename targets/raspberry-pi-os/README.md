@@ -34,7 +34,7 @@ Environment knobs (all optional):
 
 - The window is **resizable** — drag the frame and the framework viewport
   reflows live (`setViewportMetrics` + full-tree repaint). **F11** toggles
-  borderless fullscreen. **Esc** or closing the window quits. The title bar
+  borderless fullscreen. **Esc** is a normal app key; closing the window quits. The title bar
   shows the app's display name. Known limitation: `<canvas>` apps whose
   drawing surface no longer matches the resized viewport fall back to
   per-rect `streamRect` flushes, each of which presents, so frame rate drops
@@ -143,3 +143,53 @@ yet). BLE reports no driver; audio is stubbed silent; the IMU returns zeros.
   avoid right-edge truncation.
 - `virtual-list` — drag-scroll works: a 150-logical-px drag scrolls exactly
   150 px through the 5000-row virtualized list.
+
+## Keyboard input
+
+The native keyboard requires SDL2 >=2.0.22 (extended IME events); older headers
+refuse compilation. Physical SDL key events do not pass through the
+metadata-free integer hardware queue. The target owns a bounded 256-event queue
+of native key/text packets and generation-aware NodeHandle focus leases. SDL
+keydown and keyup carry key, physical code, legacy keyCode, modifiers, repeat
+and text-editing composition state to the shared Tree dispatcher. Only the
+current SDL window is admitted; window focus loss/hidden/minimize clears pending
+composition/events. Tree focus transitions revoke pending events, including
+A→B→A, and removal/reuse/disable or focus supersession refuses delivery.
+Controls disabled directly or through a containing fieldset refuse key and text
+input. Ordinary Tree realm reset refreshes the document focus subscriptions.
+Process termination retires producer admission and subscriptions before
+application cleanup. The integer queue remains separately ordered compatibility
+for non-SDL hardware, without physical-event duplication.
+
+Escape dispatches its normal key event and does not terminate the app. SDL_QUIT
+and the owned window's close event still exit. F11 is a once/nonrepeat native
+default only after dispatch and no prevention. Backspace and SDL_TEXTINPUT
+mutate only the still-current admitted active input, once after key/default
+guards; text is SDL UTF-8 and backspace removes one code point (not a grapheme
+editor). Real user edits mark the existing ControlCommit authority; Return
+commits once without repeat/IME/modifier bypass. No synthetic extra keydown is
+emitted. The mapping supports named navigation/control/F1–F12, Latin letters and
+unshifted ASCII; unsupported layout-specific shifted punctuation returns
+Unidentified rather than inventing a US key. Physical codes are explicit
+supported SDL scancodes; normal text comes from SDL_TEXTINPUT, including
+extended IME editing state.
+
+### Keyboard tests
+
+`test/keyboard.test.cpp` exercises the keyboard producer with real SDL structs,
+the Tree/Document dispatcher, the integer queue and the key drain extracted from
+the current `main/rpios_main.cpp`. It covers key metadata, keyup,
+modifiers/repeat/IME, window and focus changes, stale or disabled targets,
+prevented defaults and the legacy queue. `test/keyboard-detach.test.cpp` covers
+focus detach/refocus cancellation. The tests need no SDL initialization, window,
+display or OS input.
+
+Set `GEA_CORE_ROOT` to a Core checkout and `GEA_SDL_INCLUDE_ROOT` /
+`GEA_SDL_ARCH_INCLUDE_ROOT` to the SDL and architecture include directories,
+then run from this target:
+
+```bash
+bash test/run-keyboard.sh            # build and run
+bash test/run-keyboard.sh --build-only
+bash test/run-keyboard-detach.sh --build-only
+```

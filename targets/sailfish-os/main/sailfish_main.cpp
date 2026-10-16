@@ -1,3 +1,7 @@
+#include <cstdio>
+#include "host/timers.h"
+#include "host/worker.h"
+#include "ui/tree_events.h"
 /* targets/sailfish-os/main/sailfish_main.cpp
  * Sailfish OS entry point. Runs the gea app loop with an SDL2 window as the
  * display (sailfish_display.cpp) and SDL mouse/touch/keyboard events as input.
@@ -286,17 +290,8 @@ void dispatchKeyInput()
 		event.cancelable = true;
 
 		const int inputId = tree.activeInputId();
-		bool stopped = false;
-		if (inputId >= 0) {
-			event.targetId = inputId;
-			event.currentTargetId = inputId;
-			tree.dispatchEvent(event);
-			stopped = event.propagationStopped;
-		}
-		if (!stopped) {
-			event.propagationStopped = false;
-			gea::embedded::ui::dispatchDocumentKeyDown(event);
-		}
+		event.targetId = inputId;
+		gea::embedded::ui::dispatchRootKeyEvent(event);
 	}
 }
 
@@ -399,6 +394,9 @@ void pumpSdlEvents()
 				g_resize_window_w = event.window.data1;
 				g_resize_window_h = event.window.data2;
 				break;
+			case SDL_WINDOWEVENT_FOCUS_LOST:
+                gea::embedded::ui::dispatchWindowLifecycleEvent(gea::framework::events::PointerEventType::WindowBlur);
+                break;
 			case SDL_WINDOWEVENT_MINIMIZED:
 			case SDL_WINDOWEVENT_HIDDEN:
 				setPaused(true);
@@ -451,8 +449,30 @@ void on_fatal(int sig, siginfo_t *info, void *ctx)
 
 }  // namespace
 
+// Optional app-owned process cleanup, before the native runtime/static teardown.
+// No callback on a skin/resident-app replacement; this is actual process exit.
+extern "C" __attribute__((weak)) void gea_native_application_terminate() {}
+namespace {
+void geaRetireNativeProcess() noexcept {
+ static bool retired = false; // Actual process exit on the application thread.
+ if (retired) return;
+ retired = true;
+ try { gea_native_application_terminate(); }
+ catch (...) { std::fputs("Gea: application termination callback failed; retiring SDK callbacks\n", stderr); }
+ try { gea::host::retireScheduledCallbacks(); }
+ catch (...) { std::fputs("Gea: scheduled callback retirement failed\n", stderr); }
+ gea::embedded::ui::retireNativeEventRealm();
+ try { gea::host::workers::retireMainContext(); }
+ catch (...) { std::fputs("Gea: main Context retirement failed\n", stderr); }
+}
+struct GeaNativeTerminationGuard {
+ ~GeaNativeTerminationGuard(){geaRetireNativeProcess();}
+};
+}
+
 int main(int argc, char **argv)
 {
+	GeaNativeTerminationGuard terminationGuard;
 	(void)argc; (void)argv;
 
 	setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -548,6 +568,7 @@ int main(int argc, char **argv)
 				h = sailfish_canvas_height();
 				gea::embedded::ui::setViewportMetrics(w, h, dpr);
 				gea::embedded::ui::Document::setPreferredMountSize(w, h);
+                gea::embedded::ui::dispatchWindowLifecycleEvent(gea::framework::events::PointerEventType::WindowResize);
 				const int count = tree.nodeCount();
 				for (int id = 0; id < count; ++id) markNodeFullyDirty(tree, id);
 				std::fprintf(stderr, "[sailfish] resized to %dx%d (window %dx%d)\n",

@@ -1,3 +1,7 @@
+#include <cstdio>
+#include "host/timers.h"
+#include "host/worker.h"
+#include "ui/tree_events.h"
 /* targets/raspberry-pi-os/main/rpios_main.cpp
  * Linux desktop entry point. Runs the gea app loop with an SDL2 window as the
  * display (rpios_display.cpp) and SDL mouse/touch/keyboard events as input.
@@ -9,7 +13,7 @@
  *   per frame:
  *     pump SDL events:
  *       mouse (pointer 0) / fingers (multi-touch) → touch event queue
- *       keys → input::queueKeyDown, text → focused <input> value
+ *       keys/text → owned-window metadata queue, captured focus allocation → native dispatch/defaults
  *       wheel → Tree::scrollByKeyStep + input::queueRotaryDelta
  *       window resize/minimize/expose → display resize / pause / re-present
  *     dispatch queued events (touch → TouchRuntime; key/rotary drains)
@@ -30,7 +34,12 @@
 #include "event.h"
 #include "events.h"
 #include "input.h"
+#if __has_include("resident_apps.h")
 #include "resident_apps.h"
+#define GEA_RPIOS_HAS_RESIDENT_APPS 1
+#else
+#define GEA_RPIOS_HAS_RESIDENT_APPS 0
+#endif
 #include "services/frame_scheduler.h"
 #include "css/declarative.h"
 #include "css/engine.h"
@@ -42,6 +51,7 @@
 #include "touch.h"
 
 #include <SDL2/SDL.h>
+#include "rpios_keyboard.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -60,10 +70,10 @@ extern "C" int rpios_display_consume_vsync_wait();
 extern "C" void rpios_display_present();
 extern "C" void rpios_display_toggle_fullscreen();
 extern "C" int rpios_display_window_scale();
+extern "C" Uint32 rpios_display_window_id();
+extern "C" bool rpios_display_keyboard_focus();
 extern "C" int rpios_display_resize(int new_width, int new_height);
 extern "C" int gea_embedded_apps_launch(const char *app_id);
-extern "C" void rpios_runtime_storage_load();
-extern "C" void rpios_runtime_storage_flush();
 extern "C" void rpios_install_wifi_driver();
 
 namespace gea::rpios {
@@ -92,7 +102,10 @@ double devicePixelRatio()
 // CSS animation engine. Mirrors the geaos main loop / @geastack/core runtime.cpp.
 void driveCssAnimations(std::uint32_t nowMs)
 {
-	const char *active = gea::framework::apps::ResidentApps::activeId();
+	const char *active = nullptr;
+#if GEA_RPIOS_HAS_RESIDENT_APPS
+	active = gea::framework::apps::ResidentApps::activeId();
+#endif
 	static char lastScanned[64] = {0};
 	static bool singleAppScanned = false;
 	const bool shouldScan = active ? std::strcmp(active, lastScanned) != 0 : !singleAppScanned;
@@ -174,37 +187,6 @@ void injectFinger(gea::platform::touch::Phase phase, bool touching, float nx, fl
 	    static_cast<gea::framework::events::TouchPhase>(phase), touching, x, y, pointerId);
 }
 
-// ---- keyboard --------------------------------------------------------------
-
-// SDL keysym → web keyCode (the framework's key event currency; see
-// input::queueKeyDown). Unmapped keys return 0 and are dropped.
-int webKeyCodeForSdl(SDL_Keycode sym)
-{
-	if (sym >= SDLK_a && sym <= SDLK_z) return 'A' + (int)(sym - SDLK_a);
-	if (sym >= SDLK_0 && sym <= SDLK_9) return '0' + (int)(sym - SDLK_0);
-	switch (sym) {
-	case SDLK_RETURN:
-	case SDLK_KP_ENTER: return 13;
-	case SDLK_BACKSPACE: return 8;
-	case SDLK_TAB: return 9;
-	case SDLK_SPACE: return 32;
-	case SDLK_PAGEUP: return 33;
-	case SDLK_PAGEDOWN: return 34;
-	case SDLK_END: return 35;
-	case SDLK_HOME: return 36;
-	case SDLK_LEFT: return 37;
-	case SDLK_UP: return 38;
-	case SDLK_RIGHT: return 39;
-	case SDLK_DOWN: return 40;
-	case SDLK_DELETE: return 46;
-	default: return 0;
-	}
-}
-
-// Mark a mutated <input> so its new value actually reaches the panel — same
-// bits the virtual keyboard sets (see virtual_keyboard.cpp applyKeyToActiveInput:
-// render.dirty alone records the DrawText command but the dirty-region tracker
-// never flushes it).
 void markNodeFullyDirty(gea::embedded::ui::Tree &tree, int nodeId)
 {
 	if (nodeId < 0 || nodeId >= tree.nodeCount()) return;
@@ -216,60 +198,9 @@ void markNodeFullyDirty(gea::embedded::ui::Tree &tree, int nodeId)
 	node.render.non_scroll_dirty = 1;
 }
 
-// Physical-keyboard text entry: mutate the focused <input>'s value attribute
-// and fire the synthetic input/keydown events, mirroring what the on-screen
-// virtual keyboard does for taps. Returns false when no input is focused.
-bool appendTextToActiveInput(const char *utf8)
-{
-	auto &tree = gea::embedded::ui::Tree::instance();
-	const int activeId = tree.activeInputId();
-	if (activeId < 0) return false;
+// ---- keyboard --------------------------------------------------------------
 
-	const char *currentValue = tree.getAttribute(activeId, "value");
-	std::string next = currentValue ? std::string(currentValue) : std::string();
-	bool changed = false;
-	for (const char *p = utf8; *p; p++) {
-		// ASCII printable only — the raster pipeline's fonts cover ASCII.
-		if (*p >= 32 && *p < 127) {
-			next.push_back(*p);
-			changed = true;
-		}
-	}
-	if (!changed) return true;
-	tree.setAttribute(activeId, "value", next.c_str());
-	markNodeFullyDirty(tree, activeId);
-
-	gea::framework::events::PointerEvent ev{};
-	ev.type = gea::framework::events::PointerEventType::Input;
-	ev.targetId = activeId;
-	tree.dispatchEvent(ev);
-	return true;
-}
-
-bool applyBackspaceToActiveInput()
-{
-	auto &tree = gea::embedded::ui::Tree::instance();
-	const int activeId = tree.activeInputId();
-	if (activeId < 0) return false;
-
-	const char *currentValue = tree.getAttribute(activeId, "value");
-	std::string next = currentValue ? std::string(currentValue) : std::string();
-	if (!next.empty()) {
-		next.pop_back();
-		tree.setAttribute(activeId, "value", next.c_str());
-		markNodeFullyDirty(tree, activeId);
-		gea::framework::events::PointerEvent ev{};
-		ev.type = gea::framework::events::PointerEventType::Input;
-		ev.targetId = activeId;
-		tree.dispatchEvent(ev);
-	}
-	gea::framework::events::PointerEvent kd{};
-	kd.type = gea::framework::events::PointerEventType::KeyDown;
-	kd.targetId = activeId;
-	kd.keyCode = 8;
-	tree.dispatchEvent(kd);
-	return true;
-}
+gea::rpios::keyboard::Producer g_keyboard;
 
 // ---- per-frame input drains (mirrors core/runtime.cpp, which this target
 // excludes because it runs its own loop) ------------------------------------
@@ -283,28 +214,20 @@ void dispatchRotaryInput()
 
 void dispatchKeyInput()
 {
-	auto &tree = gea::embedded::ui::Tree::instance();
-	for (int keyCode = gea::framework::input::consumeKeyDown(); keyCode != 0;
-	     keyCode = gea::framework::input::consumeKeyDown()) {
-		gea::framework::events::PointerEvent event{};
-		event.type = gea::framework::events::PointerEventType::KeyDown;
-		event.keyCode = keyCode;
-		event.bubbles = true;
-		event.cancelable = true;
-
-		const int inputId = tree.activeInputId();
-		bool stopped = false;
-		if (inputId >= 0) {
-			event.targetId = inputId;
-			event.currentTargetId = inputId;
-			tree.dispatchEvent(event);
-			stopped = event.propagationStopped;
-		}
-		if (!stopped) {
-			event.propagationStopped = false;
-			gea::embedded::ui::dispatchDocumentKeyDown(event);
-		}
-	}
+ g_keyboard.bind(rpios_display_window_id(),rpios_display_keyboard_focus());
+ g_keyboard.drain(rpios_display_toggle_fullscreen);
+ // Compatibility for non-SDL hardware producers. Physical SDL keys never enter
+ // this integer queue, so they cannot be delivered twice or lose their metadata.
+ gea::framework::input::HardwareKeyEvent key{};
+ while(gea::framework::input::consumeKeyEvent(key)){
+  auto owner=gea::embedded::ui::Document::instance().activeElement();
+  if(!owner.valid())owner=gea::embedded::ui::NodeHandle(gea::embedded::ui::Tree::instance().mountedRoot());
+  if(!owner.isConnected()||owner.disabled()||gea::embedded::ui::selector::disabled(gea::embedded::ui::Tree::instance(),owner.id()))continue;
+  gea::framework::events::PointerEvent event{};
+  event.type=key.pressed?gea::framework::events::PointerEventType::KeyDown:gea::framework::events::PointerEventType::KeyUp;
+  event.keyCode=key.keyCode;event.targetId=owner.id();
+  gea::embedded::ui::dispatchRootKeyEvent(event);
+ }
 }
 
 void setPaused(bool paused)
@@ -319,33 +242,21 @@ void pumpSdlEvents()
 {
 	using gea::platform::touch::Phase;
 	static bool mouseDown = false;
+ g_keyboard.bind(rpios_display_window_id(),rpios_display_keyboard_focus());
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
 		case SDL_QUIT:
 			g_stop = 1;
 			break;
-		case SDL_KEYDOWN: {
-			const SDL_Keycode sym = event.key.keysym.sym;
-			if (sym == SDLK_ESCAPE) {
-				g_stop = 1;
-				break;
-			}
-			if (sym == SDLK_F11) {
-				rpios_display_toggle_fullscreen();
-				break;
-			}
-			// Backspace/Enter on a focused <input> take the virtual-keyboard
-			// path (value mutation + synthetic events); everything else is
-			// queued as a web keyCode and drained by dispatchKeyInput.
-			if (sym == SDLK_BACKSPACE && applyBackspaceToActiveInput()) break;
-			const int keyCode = webKeyCodeForSdl(sym);
-			if (keyCode != 0) gea::framework::input::queueKeyDown(keyCode);
-			break;
-		}
-		case SDL_TEXTINPUT:
-			appendTextToActiveInput(event.text.text);
-			break;
+  case SDL_KEYDOWN:
+  case SDL_KEYUP:
+  case SDL_TEXTINPUT:
+  case SDL_TEXTEDITING:
+  case SDL_TEXTEDITING_EXT:
+   g_keyboard.accept(event);
+   if(event.type==SDL_TEXTEDITING_EXT)SDL_free(event.editExt.text);
+   break;
 		case SDL_MOUSEWHEEL: {
 			static const bool inputTrace = [] {
 				const char *v = std::getenv("GEA_INPUT_TRACE");
@@ -400,12 +311,20 @@ void pumpSdlEvents()
 			break;
 		}
 		case SDL_WINDOWEVENT:
+   g_keyboard.accept(event);
+   if(event.window.windowID!=rpios_display_window_id())break;
 			switch (event.window.event) {
-			case SDL_WINDOWEVENT_SIZE_CHANGED:
+			case SDL_WINDOWEVENT_CLOSE:
+    g_stop=1;
+    break;
+   case SDL_WINDOWEVENT_SIZE_CHANGED:
 				g_resize_pending = true;
 				g_resize_window_w = event.window.data1;
 				g_resize_window_h = event.window.data2;
 				break;
+			case SDL_WINDOWEVENT_FOCUS_LOST:
+                gea::embedded::ui::dispatchWindowLifecycleEvent(gea::framework::events::PointerEventType::WindowBlur);
+                break;
 			case SDL_WINDOWEVENT_MINIMIZED:
 			case SDL_WINDOWEVENT_HIDDEN:
 				setPaused(true);
@@ -435,7 +354,6 @@ void dispatchPendingEvents()
 		case gea::framework::events::EventType::Frame:
 		case gea::framework::events::EventType::Timeout:
 		case gea::framework::events::EventType::SettingsToggle:
-		case gea::framework::events::EventType::AppLaunch:
 			break;
 		}
 	}
@@ -459,8 +377,32 @@ void on_fatal(int sig, siginfo_t *info, void *ctx)
 
 }  // namespace
 
+// Optional app-owned process cleanup, before the native runtime/static teardown.
+// No callback on a skin/resident-app replacement; this is actual process exit.
+extern "C" __attribute__((weak)) void gea_native_application_terminate() {}
+namespace {
+void geaRetireNativeProcess() noexcept {
+ static bool retired = false; // Actual process exit on the application thread.
+ if (retired) return;
+ retired = true;
+ try { g_keyboard.shutdown(); }
+ catch (...) { std::fputs("Gea: SDL keyboard retirement failed\n", stderr); }
+ try { gea_native_application_terminate(); }
+ catch (...) { std::fputs("Gea: application termination callback failed; retiring SDK callbacks\n", stderr); }
+ try { gea::host::retireScheduledCallbacks(); }
+ catch (...) { std::fputs("Gea: scheduled callback retirement failed\n", stderr); }
+ gea::embedded::ui::retireNativeEventRealm();
+ try { gea::host::workers::retireMainContext(); }
+ catch (...) { std::fputs("Gea: main Context retirement failed\n", stderr); }
+}
+struct GeaNativeTerminationGuard {
+ ~GeaNativeTerminationGuard(){geaRetireNativeProcess();}
+};
+}
+
 int main(int argc, char **argv)
 {
+	GeaNativeTerminationGuard terminationGuard;
 	(void)argc; (void)argv;
 
 	setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -496,13 +438,9 @@ int main(int argc, char **argv)
 	// Report the desktop's real link state — apps gate remote fetches on it.
 	rpios_install_wifi_driver();
 
-	// Restore persisted localStorage BEFORE Application::init — app store
-	// init() reads localStorage during mount. Two views share the blob file:
-	// the geatsc runtime's host storage (what generated apps actually use;
-	// synced by rpios_storage_bridge.cpp) and the native StorageFacade
-	// (mirrors runtime.cpp's boot-time Storage.load()).
+	// The current compiler binds localStorage to the shared StorageFacade.
+	// Restore it before app top-level/mount; flush only its dirty state per frame.
 	gea::framework::services::StorageService::init();
-	rpios_runtime_storage_load();
 	gea::host::Storage.load();
 
 	gea::framework::app::Application::init(w, h, dpr);
@@ -556,6 +494,7 @@ int main(int argc, char **argv)
 				h = rpios_canvas_height();
 				gea::embedded::ui::setViewportMetrics(w, h, dpr);
 				gea::embedded::ui::Document::setPreferredMountSize(w, h);
+                gea::embedded::ui::dispatchWindowLifecycleEvent(gea::framework::events::PointerEventType::WindowResize);
 				const int count = tree.nodeCount();
 				for (int id = 0; id < count; ++id) markNodeFullyDirty(tree, id);
 				std::fprintf(stderr, "[rpios] resized to %dx%d (window %dx%d)\n",
@@ -573,9 +512,7 @@ int main(int argc, char **argv)
 		driveCssAnimations(static_cast<std::uint32_t>(nowMs));
 		gea::framework::app::Application::frame(nowMs);
 		// Persist localStorage mutations from this frame (no-op unless changed;
-		// mirrors runtime.cpp's per-frame Storage.flushPending()). Both views:
-		// the geatsc runtime store (bridge) and the native facade.
-		rpios_runtime_storage_flush();
+		// mirrors runtime.cpp's per-frame Storage.flushPending()).
 		gea::host::Storage.flushPending();
 		struct timespec t_af1;
 		clock_gettime(CLOCK_MONOTONIC, &t_af1);
