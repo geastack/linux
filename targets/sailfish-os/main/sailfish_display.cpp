@@ -13,10 +13,11 @@
  *   - Display::pushClip / popClip forward to the Canvas clip stack — the
  *     framework relies on a working clip to constrain each dirty-region
  *     replay; stubbing them tanks fps (see the geaos header comment).
- *   - The window is an integer-scaled view of the logical canvas
+ *   - The window is an integer-scaled view of the canvas
  *     (GEA_SAILFISH_SCALE, default 1). After a window resize, the canvas is
- *     resized to window size / scale. At the default scale and DPR of 1,
- *     one CSS pixel is one canvas pixel and one SDL window coordinate unit.
+ *     resized to window size / scale. Pointer events are window points and
+ *     are converted to canvas pixels by sailfish_window_to_canvas(). CSS
+ *     pixels are canvas pixels / DPR and are not a second pointer scale.
  *
  * Window size / scale / DPR come from the environment so apps tuned for a
  * particular panel can be reproduced exactly:
@@ -115,7 +116,12 @@ void ensure_window()
 #ifndef GEA_SAILFISH_APP_TITLE
 #define GEA_SAILFISH_APP_TITLE "gea"
 #endif
-	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+	// No SDL_WINDOW_ALLOW_HIGHDPI. Gea devicePixelRatio is already canvas pixels
+	// per CSS pixel. The high-DPI flag makes the drawable larger than the window
+	// and, with a logical renderer size, scales normalized touches again. On
+	// device that sent DPR 2 taps to the wrong control. The texture is stretched
+	// to the window instead; sailfish_window_to_canvas() maps pointers.
+	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
 	window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 	g_window = SDL_CreateWindow(GEA_SAILFISH_APP_TITLE,
 	                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -137,9 +143,9 @@ void ensure_window()
 		std::fprintf(stderr, "[sailfish display] SDL_CreateRenderer failed: %s\n", SDL_GetError());
 		return;
 	}
-	// Integer-scale the logical canvas to the window; nearest keeps pixels crisp.
+	// Nearest keeps integer window scaling crisp. The texture is the canvas;
+	// RenderCopy stretches it to the window. Pointers are not scaled here.
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
-	SDL_RenderSetLogicalSize(g_renderer, g_canvas_width, g_canvas_height);
 	g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_RGB565,
 	                              SDL_TEXTUREACCESS_STREAMING,
 	                              g_canvas_width, g_canvas_height);
@@ -149,9 +155,12 @@ void ensure_window()
 	}
 	SDL_RendererInfo info{};
 	SDL_GetRendererInfo(g_renderer, &info);
+	int window_w = 0, window_h = 0, drawable_w = 0, drawable_h = 0;
+	SDL_GetWindowSize(g_window, &window_w, &window_h);
+	SDL_GetRendererOutputSize(g_renderer, &drawable_w, &drawable_h);
 	g_sdl_ok = true;
-	std::fprintf(stderr, "[sailfish display] SDL window %dx%d (scale %d, renderer %s%s)\n",
-	             g_canvas_width, g_canvas_height, g_window_scale, info.name,
+	std::fprintf(stderr, "[sailfish display] SDL window %dx%d drawable %dx%d canvas %dx%d (scale %d, renderer %s%s)\n",
+	             window_w, window_h, drawable_w, drawable_h, g_canvas_width, g_canvas_height, g_window_scale, info.name,
 	             (info.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : "");
 }
 
@@ -246,6 +255,44 @@ extern "C" void sailfish_display_toggle_fullscreen()
 
 extern "C" int sailfish_display_window_scale() { return g_window_scale; }
 
+extern "C" void sailfish_window_size(int *width, int *height)
+{
+	int w = g_canvas_width * g_window_scale;
+	int h = g_canvas_height * g_window_scale;
+	if (g_window) SDL_GetWindowSize(g_window, &w, &h);
+	if (w < 1) w = 1;
+	if (h < 1) h = 1;
+	if (width) *width = w;
+	if (height) *height = h;
+}
+
+// Three spaces:
+//   window points  — SDL_GetWindowSize and SDL mouse/wheel coordinates;
+//                    finger events are 0..1 of this window
+//   drawable pixels — SDL_GetRendererOutputSize. This matches window points
+//                    because the window is created without ALLOW_HIGHDPI.
+//                    Do not multiply a pointer by drawable/window: that is the
+//                    second scale that missed controls at devicePixelRatio 2.
+//   canvas pixels  — the framebuffer and the hit-test space. CSS pixels are
+//                    canvas / DPR inside the framework and are not applied here.
+// canvas = window_point * canvas_size / window_size, then clamped.
+extern "C" void sailfish_window_to_canvas(int window_x, int window_y, int *canvas_x, int *canvas_y)
+{
+	int window_w = 1;
+	int window_h = 1;
+	sailfish_window_size(&window_w, &window_h);
+	long long x = (long long)window_x * g_canvas_width / window_w;
+	long long y = (long long)window_y * g_canvas_height / window_h;
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	const int maxX = g_canvas_width > 0 ? g_canvas_width - 1 : 0;
+	const int maxY = g_canvas_height > 0 ? g_canvas_height - 1 : 0;
+	if (x > maxX) x = maxX;
+	if (y > maxY) y = maxY;
+	if (canvas_x) *canvas_x = (int)x;
+	if (canvas_y) *canvas_y = (int)y;
+}
+
 // Rebuild the framebuffer + streaming texture at a new logical size (window
 // resized or fullscreen toggled). The canvas rebinds to the new buffer; the
 // caller (sailfish_main) then updates the framework viewport metrics and marks
@@ -281,7 +328,6 @@ extern "C" int sailfish_display_resize(int new_width, int new_height)
 	g_canvas_width = new_width;
 	g_canvas_height = new_height;
 	g_canvas.bindPixels(g_framebuffer, g_canvas_width, g_canvas_height);
-	if (g_sdl_ok) SDL_RenderSetLogicalSize(g_renderer, g_canvas_width, g_canvas_height);
 
 	const int cap = new_width * new_height;
 	if (g_backdrop_buffer && cap > g_backdrop_cap) {
