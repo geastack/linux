@@ -9,7 +9,7 @@ we develop and test on; other distros can become sibling targets later.
 ## Build & run
 
 ```bash
-sudo apt install libsdl2-dev libcurl4-openssl-dev   # once
+sudo apt install libsdl2-dev libcurl4-openssl-dev libfreetype-dev file   # once
 bash targets/raspberry-pi-os/build-raspberry-pi-os.sh bouncing-balls-jsx
 ./targets/raspberry-pi-os/dist/bouncing-balls-jsx/bouncing-balls-jsx
 ```
