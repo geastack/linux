@@ -49,8 +49,13 @@ For Sailfish OS, use the standalone Bash or PowerShell build script described in
 
 ## Dependencies
 
-- `build-essential`, `libsdl2-dev`, `libcurl4-openssl-dev`, `nodejs`, `npm`
-  (Debian/Raspberry Pi OS packages).
+- `build-essential`, `libsdl2-dev`, `libcurl4-openssl-dev`, `libfreetype-dev`,
+  `file`, `nodejs`, `npm` (Debian/Raspberry Pi OS packages). The build script
+  needs FreeType (through `pkg-config`) for runtime fonts, and runs `file` on
+  the linked binary.
+- `@geastack/cli` requires Node.js 22 or newer. Debian 13's `nodejs` is 20 and
+  builds with an engine warning; Debian 12's is 18, where `gea` fails to start,
+  so install a newer Node.js there.
 - The rest of the stack from npm: `npm install` brings in `@geastack/core` and
   `@geastack/compiler`, which carry the codegen toolchain (vite + the `@geajs`
   packages).
