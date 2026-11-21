@@ -12,7 +12,8 @@ if ($CoreRepository) { $argsForNode += (Resolve-Path $CoreRepository).Path }
 & node @argsForNode
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($PrepareOnly) { exit 0 }
-$project = Join-Path $here "build/$((Get-Content (Join-Path $AppDirectory 'package.json') | ConvertFrom-Json).gea.id)-$Architecture/project"
+$appRoot = (Resolve-Path $AppDirectory).Path
+$project = Join-Path $appRoot ".gea-sailfish/build/$((Get-Content (Join-Path $appRoot 'package.json') | ConvertFrom-Json).gea.id)-$Architecture/project"
 $sfdk = Join-Path $SdkRoot 'bin/sfdk.exe'
 if (!(Test-Path $sfdk)) { throw "Sailfish SDK missing at $sfdk" }
 Push-Location $project

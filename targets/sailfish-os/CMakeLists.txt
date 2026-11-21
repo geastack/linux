@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(MALIIT REQUIRED IMPORTED_TARGET maliit-glib)
 include(${CMAKE_CURRENT_SOURCE_DIR}/sources.cmake)
 
 add_executable(${GEA_PACKAGE_NAME} ${GEA_C_SOURCES} ${GEA_CXX_SOURCES})
@@ -21,6 +22,9 @@ target_compile_definitions(${GEA_PACKAGE_NAME} PRIVATE
   GEA_EMBEDDED_HAS_GENERATED_FONTS=1
   GEA_EMBEDDED_TTF_RUNTIME_FONTS=1
   GEA_EMBEDDED_TTF_RUNTIME_DECLARED_GLYPHS=128
+  # The Sailfish keyboard (Maliit, main/sailfish_keyboard.cpp) handles text
+  # entry; the engine's own on-screen keyboard would open on top of it.
+  GEA_EMBEDDED_ENABLE_VIRTUAL_KEYBOARD=0
   $<$<COMPILE_LANGUAGE:C>:GEA_EMBEDDED_GIF_C_API>
   GEA_SAILFISH_APP_ID="${GEA_APP_ID}"
   GEA_SAILFISH_APP_TITLE="${GEA_APP_TITLE}"
@@ -28,7 +32,15 @@ target_compile_definitions(${GEA_PACKAGE_NAME} PRIVATE
   GEA_SAILFISH_APPLICATION_NAME="${GEA_SAILFISH_APPLICATION_NAME}")
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/main/sailfish_main.cpp
   PROPERTIES COMPILE_DEFINITIONS GEA_SAILFISH_DEFAULT_DPR=${GEA_SAILFISH_DEFAULT_DPR})
-target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL pthread m rt)
+target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL PkgConfig::MALIIT pthread m rt)
+# App-declared link dependencies (gea.sailfish.pkgConfigModules and
+# nativeSystemLibraries); the spec lists each module as a BuildRequires.
+foreach(GEA_APP_PKG_MODULE IN LISTS GEA_APP_PKG_MODULES)
+  string(MAKE_C_IDENTIFIER "GEA_APP_PKG_${GEA_APP_PKG_MODULE}" GEA_APP_PKG_PREFIX)
+  pkg_check_modules(${GEA_APP_PKG_PREFIX} REQUIRED IMPORTED_TARGET ${GEA_APP_PKG_MODULE})
+  target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::${GEA_APP_PKG_PREFIX})
+endforeach()
+target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE ${GEA_APP_SYSTEM_LIBRARIES})
 target_link_options(${GEA_PACKAGE_NAME} PRIVATE -Wl,--export-dynamic)
 
 install(TARGETS ${GEA_PACKAGE_NAME} RUNTIME DESTINATION bin)

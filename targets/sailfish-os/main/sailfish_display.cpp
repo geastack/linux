@@ -14,8 +14,9 @@
  *     framework relies on a working clip to constrain each dirty-region
  *     replay; stubbing them tanks fps (see the geaos header comment).
  *   - The window is an integer-scaled view of the logical canvas
- *     (GEA_SAILFISH_SCALE, default 1). After a window resize, the canvas is
- *     resized to window size / scale. At the default scale and DPR of 1,
+ *     (GEA_SAILFISH_SCALE, default 1). The canvas is the renderer output in
+ *     physical pixels / scale, at startup and after every window resize, so
+ *     a Wayland output scale does not stretch a low-resolution canvas. At the default scale and DPR of 1,
  *     one CSS pixel is one canvas pixel and one SDL window coordinate unit.
  *
  * Window size / scale / DPR come from the environment so apps tuned for a
@@ -23,7 +24,9 @@
  *   GEA_SAILFISH_WIDTH   initial canvas width   (default 410)
  *   GEA_SAILFISH_HEIGHT  initial canvas height  (default 502)
  *   GEA_SAILFISH_SCALE   integer window scale   (default 1)
- *   GEA_SAILFISH_DPR     canvas pixels per CSS pixel (app setting, otherwise 1)
+ *   GEA_SAILFISH_DPR     canvas pixels per CSS pixel, or "auto" (app setting;
+ *                        "auto" is an integer derived from the panel, see
+ *                        sailfish_main.cpp)
  *
  * The window is resizable: the main loop reacts to SDL_WINDOWEVENT_SIZE_CHANGED
  * by calling sailfish_display_resize(), which reallocates the framebuffer +
@@ -115,7 +118,8 @@ void ensure_window()
 #ifndef GEA_SAILFISH_APP_TITLE
 #define GEA_SAILFISH_APP_TITLE "gea"
 #endif
-	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+	int window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+	if (env_int("GEA_SAILFISH_HIGHDPI", 1, 0, 1)) window_flags |= SDL_WINDOW_ALLOW_HIGHDPI;
 	window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 	g_window = SDL_CreateWindow(GEA_SAILFISH_APP_TITLE,
 	                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -137,9 +141,36 @@ void ensure_window()
 		std::fprintf(stderr, "[sailfish display] SDL_CreateRenderer failed: %s\n", SDL_GetError());
 		return;
 	}
+	// The canvas covers the renderer's output in physical pixels (divided by
+	// scale), not the window size: under a Wayland output scale the window size
+	// is in points, and a points-sized canvas stretched to the output made every
+	// glyph a block of pixels. One canvas pixel is one panel pixel at scale 1.
+	{
+		int output_w = 0, output_h = 0;
+		if (SDL_GetRendererOutputSize(g_renderer, &output_w, &output_h) == 0 && output_w > 0 && output_h > 0) {
+			const int w = std::clamp(output_w / g_window_scale, 64, 4096);
+			const int h = std::clamp(output_h / g_window_scale, 64, 4096);
+			if (w != g_canvas_width || h != g_canvas_height) {
+				const size_t pixels = (size_t)w * (size_t)h;
+				uint16_t *fb = static_cast<uint16_t *>(std::calloc(pixels, sizeof(uint16_t)));
+				if (fb) {
+					std::free(g_framebuffer);
+					g_framebuffer = fb;
+					g_framebuffer_pixels = pixels;
+					g_canvas_width = w;
+					g_canvas_height = h;
+					g_canvas.bindPixels(g_framebuffer, g_canvas_width, g_canvas_height);
+				}
+			}
+		}
+	}
 	// Integer-scale the logical canvas to the window; nearest keeps pixels crisp.
+	// Integer scale makes SDL letterbox a remainder instead of stretching the
+	// canvas by a fraction, so one canvas pixel always covers exactly scale x
+	// scale panel pixels (1x1 at the default scale).
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 	SDL_RenderSetLogicalSize(g_renderer, g_canvas_width, g_canvas_height);
+	SDL_RenderSetIntegerScale(g_renderer, SDL_TRUE);
 	g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_RGB565,
 	                              SDL_TEXTUREACCESS_STREAMING,
 	                              g_canvas_width, g_canvas_height);
@@ -150,9 +181,13 @@ void ensure_window()
 	SDL_RendererInfo info{};
 	SDL_GetRendererInfo(g_renderer, &info);
 	g_sdl_ok = true;
-	std::fprintf(stderr, "[sailfish display] SDL window %dx%d (scale %d, renderer %s%s)\n",
+	int window_w = 0, window_h = 0, output_w = 0, output_h = 0;
+	SDL_GetWindowSize(g_window, &window_w, &window_h);
+	SDL_GetRendererOutputSize(g_renderer, &output_w, &output_h);
+	std::fprintf(stderr, "[sailfish display] SDL window %dx%d (scale %d, renderer %s%s) window=%dx%d output=%dx%d highdpi=%d\n",
 	             g_canvas_width, g_canvas_height, g_window_scale, info.name,
-	             (info.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : "");
+	             (info.flags & SDL_RENDERER_PRESENTVSYNC) ? ", vsync" : "",
+	             window_w, window_h, output_w, output_h, (window_flags & SDL_WINDOW_ALLOW_HIGHDPI) ? 1 : 0);
 }
 
 void upload_rect(int x0, int y0, int x1, int y1)
@@ -245,6 +280,39 @@ extern "C" void sailfish_display_toggle_fullscreen()
 }
 
 extern "C" int sailfish_display_window_scale() { return g_window_scale; }
+// Physical pixel size of the window's drawable (the renderer output); the
+// canvas is this size divided by the window scale. Returns 0 before SDL is up.
+extern "C" int sailfish_display_output_size(int *width, int *height)
+{
+	if (!g_sdl_ok || SDL_GetRendererOutputSize(g_renderer, width, height) != 0) return 0;
+	return *width > 0 && *height > 0;
+}
+// Physical pixels per window point (the Wayland output scale; 1 without one).
+// The main loop multiplies the app's DPR by it, so CSS sizes keep the size
+// they had on a points-sized canvas while being drawn at full resolution.
+extern "C" double sailfish_display_output_ratio()
+{
+	int window_w = 0, window_h = 0, output_w = 0, output_h = 0;
+	if (!g_sdl_ok) return 1.0;
+	SDL_GetWindowSize(g_window, &window_w, &window_h);
+	if (window_w <= 0 || SDL_GetRendererOutputSize(g_renderer, &output_w, &output_h) != 0 || output_w <= 0) return 1.0;
+	const double ratio = (double)output_w / (double)window_w;
+	return ratio >= 1.0 && ratio <= 8.0 ? ratio : 1.0;
+}
+// Short side of the panel in physical pixels: the largest short side the
+// fullscreen drawable has reported. Kept as a maximum so the on-screen keyboard
+// shrinking the window (in either orientation) does not change it; the main
+// loop derives the "auto" DPR from it. Returns 0 before SDL is up.
+extern "C" int sailfish_display_panel_short_side()
+{
+	static int panel = 0;
+	int w = 0, h = 0;
+	if (g_sdl_ok && SDL_GetRendererOutputSize(g_renderer, &w, &h) == 0 && w > 0 && h > 0)
+		panel = std::max(panel, std::min(w, h));
+	return panel;
+}
+extern "C" Uint32 sailfish_display_window_id() { return g_window ? SDL_GetWindowID(g_window) : 0; }
+extern "C" bool sailfish_display_keyboard_focus() { return g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS); }
 
 // Rebuild the framebuffer + streaming texture at a new logical size (window
 // resized or fullscreen toggled). The canvas rebinds to the new buffer; the

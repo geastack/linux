@@ -13,7 +13,7 @@
  *   per frame:
  *     pump SDL events:
  *       mouse (pointer 0) / fingers (multi-touch) → touch event queue
- *       keys → input::queueKeyDown, text → focused <input> value
+ *       keys/text → keyboard Producer (rpios_keyboard.h) → focused node
  *       wheel → Tree::scrollByKeyStep + input::queueRotaryDelta
  *       window resize/minimize/expose → display resize / pause / re-present
  *     dispatch queued events (touch → TouchRuntime; key/rotary drains)
@@ -43,9 +43,14 @@
 #include "ui/style.h"
 #include "ui/tree_internal.h"
 #include "touch.h"
+// Shared with Raspberry Pi OS: SDL key/text events with key/code/modifier
+// metadata, UTF-8 text and whole-code-point Backspace for focused inputs.
+
+#include "sailfish_keyboard.h"
 
 #include <SDL2/SDL.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +68,11 @@ extern "C" int sailfish_display_consume_vsync_wait();
 extern "C" void sailfish_display_present();
 extern "C" void sailfish_display_toggle_fullscreen();
 extern "C" int sailfish_display_window_scale();
+extern "C" Uint32 sailfish_display_window_id();
+extern "C" int sailfish_display_output_size(int *width, int *height);
+extern "C" double sailfish_display_output_ratio();
+extern "C" int sailfish_display_panel_short_side();
+extern "C" bool sailfish_display_keyboard_focus();
 extern "C" int sailfish_display_resize(int new_width, int new_height);
 extern "C" int gea_embedded_apps_launch(const char *app_id);
 extern "C" void sailfish_runtime_storage_load();
@@ -79,14 +89,39 @@ void installAppLauncherPlatform(const char *currentAppId);
 
 namespace {
 
+// The app's DPR: GEA_SAILFISH_DPR, otherwise the build's default. 0 means
+// "auto" (the default on ARM phone builds, see config.mjs sailfishDensity).
 double devicePixelRatio()
 {
 	const char *v = std::getenv("GEA_SAILFISH_DPR");
 	if (v && *v) {
+		if (std::strcmp(v, "auto") == 0) return 0.0;
 		const double dpr = std::atof(v);
 		if (dpr >= 0.5 && dpr <= 8.0) return dpr;
 	}
 	return GEA_SAILFISH_DEFAULT_DPR;
+}
+
+// CSS width an "auto" DPR keeps at least: the common phone layout width.
+constexpr int kAutoCssShortSide = 360;
+
+// The DPR handed to the framework. An explicit app DPR is multiplied by the
+// output scale (the canvas is in physical pixels, see sailfish_display.cpp).
+// "auto" is pixel-perfect: the largest integer that keeps the panel's short
+// side at least 360 CSS pixels wide, so every CSS pixel is a whole N x N block
+// of canvas pixels and edges never land between panel pixels. Every current
+// Sailfish phone is 720 or 1080 pixels wide: Jolla C2 (720x1600) gets 2 and a
+// 360x800 viewport; Xperia XA2 family (1080x1920), Xperia 10 through 10 V
+// (1080x2520) and Jolla Phone (1080x2340) get 3 and 360 CSS pixels across.
+// It is derived from the panel, not the window, so the on-screen keyboard
+// opening does not change the density.
+double effectiveDevicePixelRatio()
+{
+	const double app = devicePixelRatio();
+	if (app > 0.0) return app * sailfish_display_output_ratio();
+	const int scale = std::max(1, sailfish_display_window_scale());
+	const int shortSide = sailfish_display_panel_short_side() / scale;
+	return (double)std::max(1, shortSide / kAutoCssShortSide);
 }
 
 // Drive CSS animations each frame. Like geaos, this target runs its own loop
@@ -173,31 +208,6 @@ void injectFinger(gea::platform::touch::Phase phase, bool touching, float nx, fl
 
 // ---- keyboard --------------------------------------------------------------
 
-// SDL keysym → web keyCode (the framework's key event currency; see
-// input::queueKeyDown). Unmapped keys return 0 and are dropped.
-int webKeyCodeForSdl(SDL_Keycode sym)
-{
-	if (sym >= SDLK_a && sym <= SDLK_z) return 'A' + (int)(sym - SDLK_a);
-	if (sym >= SDLK_0 && sym <= SDLK_9) return '0' + (int)(sym - SDLK_0);
-	switch (sym) {
-	case SDLK_RETURN:
-	case SDLK_KP_ENTER: return 13;
-	case SDLK_BACKSPACE: return 8;
-	case SDLK_TAB: return 9;
-	case SDLK_SPACE: return 32;
-	case SDLK_PAGEUP: return 33;
-	case SDLK_PAGEDOWN: return 34;
-	case SDLK_END: return 35;
-	case SDLK_HOME: return 36;
-	case SDLK_LEFT: return 37;
-	case SDLK_UP: return 38;
-	case SDLK_RIGHT: return 39;
-	case SDLK_DOWN: return 40;
-	case SDLK_DELETE: return 46;
-	default: return 0;
-	}
-}
-
 // Mark a mutated <input> so its new value actually reaches the panel — same
 // bits the virtual keyboard sets (see virtual_keyboard.cpp applyKeyToActiveInput:
 // render.dirty alone records the DrawText command but the dirty-region tracker
@@ -213,60 +223,7 @@ void markNodeFullyDirty(gea::embedded::ui::Tree &tree, int nodeId)
 	node.render.non_scroll_dirty = 1;
 }
 
-// Physical-keyboard text entry: mutate the focused <input>'s value attribute
-// and fire the synthetic input/keydown events, mirroring what the on-screen
-// virtual keyboard does for taps. Returns false when no input is focused.
-bool appendTextToActiveInput(const char *utf8)
-{
-	auto &tree = gea::embedded::ui::Tree::instance();
-	const int activeId = tree.activeInputId();
-	if (activeId < 0) return false;
-
-	const char *currentValue = tree.getAttribute(activeId, "value");
-	std::string next = currentValue ? std::string(currentValue) : std::string();
-	bool changed = false;
-	for (const char *p = utf8; *p; p++) {
-		// ASCII printable only — the raster pipeline's fonts cover ASCII.
-		if (*p >= 32 && *p < 127) {
-			next.push_back(*p);
-			changed = true;
-		}
-	}
-	if (!changed) return true;
-	tree.setAttribute(activeId, "value", next.c_str());
-	markNodeFullyDirty(tree, activeId);
-
-	gea::framework::events::PointerEvent ev{};
-	ev.type = gea::framework::events::PointerEventType::Input;
-	ev.targetId = activeId;
-	tree.dispatchEvent(ev);
-	return true;
-}
-
-bool applyBackspaceToActiveInput()
-{
-	auto &tree = gea::embedded::ui::Tree::instance();
-	const int activeId = tree.activeInputId();
-	if (activeId < 0) return false;
-
-	const char *currentValue = tree.getAttribute(activeId, "value");
-	std::string next = currentValue ? std::string(currentValue) : std::string();
-	if (!next.empty()) {
-		next.pop_back();
-		tree.setAttribute(activeId, "value", next.c_str());
-		markNodeFullyDirty(tree, activeId);
-		gea::framework::events::PointerEvent ev{};
-		ev.type = gea::framework::events::PointerEventType::Input;
-		ev.targetId = activeId;
-		tree.dispatchEvent(ev);
-	}
-	gea::framework::events::PointerEvent kd{};
-	kd.type = gea::framework::events::PointerEventType::KeyDown;
-	kd.targetId = activeId;
-	kd.keyCode = 8;
-	tree.dispatchEvent(kd);
-	return true;
-}
+gea::rpios::keyboard::Producer g_keyboard;
 
 // ---- per-frame input drains (mirrors core/runtime.cpp, which this target
 // excludes because it runs its own loop) ------------------------------------
@@ -280,17 +237,21 @@ void dispatchRotaryInput()
 
 void dispatchKeyInput()
 {
-	auto &tree = gea::embedded::ui::Tree::instance();
-	for (int keyCode = gea::framework::input::consumeKeyDown(); keyCode != 0;
-	     keyCode = gea::framework::input::consumeKeyDown()) {
+	g_keyboard.bind(sailfish_display_window_id(), sailfish_display_keyboard_focus());
+	g_keyboard.drain(sailfish_display_toggle_fullscreen);
+	// Non-SDL hardware producers still use the integer queue. SDL keys never
+	// enter it, so they are not delivered twice or stripped of their metadata.
+	gea::framework::input::HardwareKeyEvent key{};
+	while (gea::framework::input::consumeKeyEvent(key)) {
+		auto owner = gea::embedded::ui::Document::instance().activeElement();
+		if (!owner.valid()) owner = gea::embedded::ui::NodeHandle(gea::embedded::ui::Tree::instance().mountedRoot());
+		if (!owner.isConnected() || owner.disabled() ||
+		    gea::embedded::ui::selector::disabled(gea::embedded::ui::Tree::instance(), owner.id())) continue;
 		gea::framework::events::PointerEvent event{};
-		event.type = gea::framework::events::PointerEventType::KeyDown;
-		event.keyCode = keyCode;
-		event.bubbles = true;
-		event.cancelable = true;
-
-		const int inputId = tree.activeInputId();
-		event.targetId = inputId;
+		event.type = key.pressed ? gea::framework::events::PointerEventType::KeyDown
+		                         : gea::framework::events::PointerEventType::KeyUp;
+		event.keyCode = key.keyCode;
+		event.targetId = owner.id();
 		gea::embedded::ui::dispatchRootKeyEvent(event);
 	}
 }
@@ -307,32 +268,24 @@ void pumpSdlEvents()
 {
 	using gea::platform::touch::Phase;
 	static bool mouseDown = false;
+	g_keyboard.bind(sailfish_display_window_id(), sailfish_display_keyboard_focus());
+	// On-screen keyboard input arrives as SDL events pushed from here.
+	sailfish_keyboard_pump();
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
 		case SDL_QUIT:
 			g_stop = 1;
 			break;
-		case SDL_KEYDOWN: {
-			const SDL_Keycode sym = event.key.keysym.sym;
-			if (sym == SDLK_ESCAPE) {
-				g_stop = 1;
-				break;
-			}
-			if (sym == SDLK_F11) {
-				sailfish_display_toggle_fullscreen();
-				break;
-			}
-			// Backspace/Enter on a focused <input> take the virtual-keyboard
-			// path (value mutation + synthetic events); everything else is
-			// queued as a web keyCode and drained by dispatchKeyInput.
-			if (sym == SDLK_BACKSPACE && applyBackspaceToActiveInput()) break;
-			const int keyCode = webKeyCodeForSdl(sym);
-			if (keyCode != 0) gea::framework::input::queueKeyDown(keyCode);
-			break;
-		}
+		// Escape and every other key go to the app; quitting is SDL_QUIT or
+		// SIGTERM only. F11 (fullscreen) is a default action in drain().
+		case SDL_KEYDOWN:
+		case SDL_KEYUP:
 		case SDL_TEXTINPUT:
-			appendTextToActiveInput(event.text.text);
+		case SDL_TEXTEDITING:
+		case SDL_TEXTEDITING_EXT:
+			g_keyboard.accept(event);
+			if (event.type == SDL_TEXTEDITING_EXT) SDL_free(event.editExt.text);
 			break;
 		case SDL_MOUSEWHEEL: {
 			static const bool inputTrace = [] {
@@ -388,6 +341,8 @@ void pumpSdlEvents()
 			break;
 		}
 		case SDL_WINDOWEVENT:
+			g_keyboard.accept(event);
+			if (event.window.windowID != sailfish_display_window_id()) break;
 			switch (event.window.event) {
 			case SDL_WINDOWEVENT_SIZE_CHANGED:
 				g_resize_pending = true;
@@ -457,6 +412,10 @@ void geaRetireNativeProcess() noexcept {
  static bool retired = false; // Actual process exit on the application thread.
  if (retired) return;
  retired = true;
+ try { sailfish_keyboard_shutdown(); }
+ catch (...) { std::fputs("Gea: Maliit keyboard retirement failed\n", stderr); }
+ try { g_keyboard.shutdown(); }
+ catch (...) { std::fputs("Gea: SDL keyboard retirement failed\n", stderr); }
  try { gea_native_application_terminate(); }
  catch (...) { std::fputs("Gea: application termination callback failed; retiring SDK callbacks\n", stderr); }
  try { gea::host::retireScheduledCallbacks(); }
@@ -497,9 +456,16 @@ int main(int argc, char **argv)
 
 	int w = sailfish_canvas_width();
 	int h = sailfish_canvas_height();
-	const double dpr = devicePixelRatio();
+	// The canvas is in physical pixels (sailfish_display.cpp); see
+	// effectiveDevicePixelRatio for how the app's DPR maps onto them.
+	double dpr = effectiveDevicePixelRatio();
 
-	std::fprintf(stderr, "[sailfish] init %dx%d dpr=%.1f app=%s\n", w, h, dpr, GEA_SAILFISH_APP_ID);
+	if (devicePixelRatio() > 0.0)
+		std::fprintf(stderr, "[sailfish] init %dx%d dpr=%.2f (app %.2f x output %.2f) app=%s\n", w, h, dpr,
+		             devicePixelRatio(), sailfish_display_output_ratio(), GEA_SAILFISH_APP_ID);
+	else
+		std::fprintf(stderr, "[sailfish] init %dx%d dpr=%.0f (auto, panel short side %d) css=%.0fx%.0f app=%s\n",
+		             w, h, dpr, sailfish_display_panel_short_side(), w / dpr, h / dpr, GEA_SAILFISH_APP_ID);
 
 	// Record the app identity: AppManager platform (Apps.currentInstalledAppId)
 	// and the C-side current-id used by generated launcher code.
@@ -527,6 +493,8 @@ int main(int argc, char **argv)
 
 	// Physical-keyboard text entry for focused <input> nodes (SDL_TEXTINPUT).
 	SDL_StartTextInput();
+	// The Sailfish on-screen keyboard follows input focus (Maliit).
+	sailfish_keyboard_init();
 
 	auto &tree = gea::embedded::ui::Tree::instance();
 
@@ -560,12 +528,17 @@ int main(int argc, char **argv)
 		// and mark every node dirty so the next refresh repaints the world.
 		if (g_resize_pending) {
 			g_resize_pending = false;
+			// The window event reports points; the canvas follows the
+			// drawable's physical pixels (see sailfish_display.cpp).
 			const int scale = sailfish_display_window_scale();
-			const int newW = g_resize_window_w / (scale > 0 ? scale : 1);
-			const int newH = g_resize_window_h / (scale > 0 ? scale : 1);
+			int outputW = g_resize_window_w, outputH = g_resize_window_h;
+			sailfish_display_output_size(&outputW, &outputH);
+			const int newW = outputW / (scale > 0 ? scale : 1);
+			const int newH = outputH / (scale > 0 ? scale : 1);
 			if (sailfish_display_resize(newW, newH)) {
 				w = sailfish_canvas_width();
 				h = sailfish_canvas_height();
+				dpr = effectiveDevicePixelRatio();
 				gea::embedded::ui::setViewportMetrics(w, h, dpr);
 				gea::embedded::ui::Document::setPreferredMountSize(w, h);
                 gea::embedded::ui::dispatchWindowLifecycleEvent(gea::framework::events::PointerEventType::WindowResize);
@@ -585,6 +558,11 @@ int main(int argc, char **argv)
 		dispatchKeyInput();
 		driveCssAnimations(static_cast<std::uint32_t>(nowMs));
 		gea::framework::app::Application::frame(nowMs);
+		{
+			const int activeInput = tree.activeInputId();
+			const char *inputType = activeInput >= 0 ? tree.getAttribute(activeInput, "type") : nullptr;
+			sailfish_keyboard_update(activeInput, inputType && std::strcmp(inputType, "password") == 0);
+		}
 		// Persist localStorage mutations from this frame (no-op unless changed;
 		// mirrors runtime.cpp's per-frame Storage.flushPending()). Both views:
 		// the geatsc runtime store (bridge) and the native facade.
