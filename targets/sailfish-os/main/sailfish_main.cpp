@@ -45,7 +45,7 @@
 #include "touch.h"
 // Shared with Raspberry Pi OS: SDL key/text events with key/code/modifier
 // metadata, UTF-8 text and whole-code-point Backspace for focused inputs.
-
+#include "rpios_keyboard.h"
 #include "sailfish_keyboard.h"
 
 #include <SDL2/SDL.h>
