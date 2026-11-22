@@ -7,11 +7,11 @@
 # Framework sources + include roots come from the shared manifest
 # core/gea_sources.sh (single source of truth, shared with web/esp32/macos),
 # resolved relative to @geastack/core in node_modules. The app is resolved by
-# the gea CLI from the directory this script is run in -- run it from the app
-# project you want to compile.
+# the gea CLI from the directory this script is run in.
 #
-# Usage: cd <app project>; targets/raspberry-pi-os/build-raspberry-pi-os.sh <app-id>
-# Run:   targets/raspberry-pi-os/dist/<app-id>/<app-id>
+# Started by the CLI, not by hand (it needs GEA_CLI_BIN from the CLI):
+#   cd <app project>; npx gea build --target raspberry-pi-os
+# Run:   ./dist/raspberry-pi-os/<app-id>/<app-id>   (GEA_LINUX_OUTPUT_DIR moves dist/raspberry-pi-os)
 #   GEA_RPIOS_WIDTH/GEA_RPIOS_HEIGHT  logical canvas size (default 410x502)
 #   GEA_RPIOS_SCALE                   integer window scale (default 2)
 set -euo pipefail

@@ -19,24 +19,47 @@ targets include Raspberry Pi OS on the Raspberry Pi 5 and Sailfish OS.
 
 ## Quick Start
 
-Declare `gea.targets["raspberry-pi-os"]: true` and depend on
-`@geastack/linux`. From the app directory, build the real native SDL target:
+The app depends on `@geastack/linux` and on the `gea` CLI (`@geastack/cli`
+0.1.104 or later, which is where the `raspberry-pi-os` target arrived; the
+CLI is a separate package and `npx gea` does not fetch it on demand), and
+declares the target in the `gea` block of its `package.json`:
 
 ```sh
-gea build --target raspberry-pi-os <app-id>
+npm install @geastack/linux
+npm install --save-dev @geastack/cli
+```
+
+```json
+"gea": {
+  "id": "my-app",
+  "entry": "index.tsx",
+  "targets": { "raspberry-pi-os": true }
+}
+```
+
+From the app directory, build the real native SDL target:
+
+```sh
+npx gea build --target raspberry-pi-os
 ```
 
 This command only builds; it never launches or deploys. The executable is
 `dist/raspberry-pi-os/<app-id>/<app-id>` under the app. It uses the shared
-compiler and raster renderer, with no browser fallback.
+compiler and raster renderer, with no browser fallback. The build script
+(`targets/raspberry-pi-os/build-raspberry-pi-os.sh`) is started by the CLI and
+refuses to run on its own.
 
-For an AArch64 cross build, provide `CC`/`CXX` (Clang), absolute
-`GEA_LINUX_SYSROOT` with GCC14 target libraries, staged development roots
-`GEA_LINUX_SDL_ROOT` and `GEA_LINUX_CURL_ROOT`, and matching runtime files
-`GEA_LINUX_SDL_LIBRARY` and `GEA_LINUX_CURL_LIBRARY`. These inputs are explicit;
-the target does not install packages or modify a sysroot. `GEA_BUILD_JOBS`
-bounds compilation to 1–16 jobs (default 2). `GEA_LINUX_ROOT` selects a local
-package checkout when developing the CLI/target together.
+For an AArch64 cross build, provide `CC`/`CXX` as Clang with `lld` installed
+(the cross link uses `-fuse-ld=lld`), an absolute `GEA_LINUX_SYSROOT` with GCC
+14 target libraries (`usr/lib/gcc/aarch64-linux-gnu/14`), staged development
+roots `GEA_LINUX_SDL_ROOT`, `GEA_LINUX_CURL_ROOT` and `GEA_LINUX_FREETYPE_ROOT`,
+and the matching runtime libraries `GEA_LINUX_SDL_LIBRARY`,
+`GEA_LINUX_CURL_LIBRARY` and `GEA_LINUX_FREETYPE_LIBRARY`. All of these are
+required. `GEA_LINUX_LIBRARY_DIR` (optional, absolute) adds a directory for
+the linker to search and to resolve transitive libraries from. These inputs
+are explicit; the target does not install packages or modify a sysroot.
+`GEA_BUILD_JOBS` bounds compilation to 1–16 jobs (default 2). `GEA_LINUX_ROOT`
+selects a local package checkout when developing the CLI/target together.
 
 Click and drag with the mouse (it acts as the touch finger); the wheel
 scrolls; the keyboard types into focused inputs; F11 toggles fullscreen; Esc
@@ -49,11 +72,19 @@ For Sailfish OS, use the standalone Bash or PowerShell build script described in
 
 ## Dependencies
 
-- `build-essential`, `libsdl2-dev`, `libcurl4-openssl-dev`, `nodejs`, `npm`
-  (Debian/Raspberry Pi OS packages).
-- The rest of the stack from npm: `npm install` brings in `@geastack/core` and
-  `@geastack/compiler`, which carry the codegen toolchain (vite + the `@geajs`
-  packages).
+- `build-essential`, `pkg-config`, `libsdl2-dev` (SDL 2.0.22 or later),
+  `libcurl4-openssl-dev`, `libfreetype-dev` (Debian/Raspberry Pi OS
+  packages). The build stops if `sdl2-config` or the `freetype2` pkg-config
+  module is missing.
+- Node.js 22 or later, which `@geastack/cli` requires. Debian Bookworm's
+  `nodejs` package is older; install Node 22 from nodejs.org, NodeSource or a
+  version manager.
+- The rest of the stack from npm: `@geastack/linux` brings in `@geastack/core`,
+  `@geastack/compiler` and `@geastack/geatsc-plugin-gea`, which carry the
+  codegen toolchain. `@geastack/cli` is installed separately (above).
+
+Audio is not implemented on Raspberry Pi OS: `rpios_audio.cpp` is a silent
+stub, so sound APIs run without output.
 
 ## How This Fits The Stack
 

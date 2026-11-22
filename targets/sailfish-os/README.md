@@ -3,17 +3,35 @@
 Builds a Gea JSX/CSS app into a local Sailfish OS RPM. The host runs Vite and
 geatsc; `sfdk` compiles the staged C/C++ sources for Sailfish OS 5.1.0.11.
 
-Requirements: Node.js 20.19+, `npm install` in this Linux repository and in
-the app's workspace, a checkout of `geastack/core`, and Sailfish SDK with the
-selected build target. The default core checkout is `../core` relative to this
-Linux repository. Pass `--core-repo` (Bash) or `-CoreRepository` (PowerShell)
-for another location.
+Requirements: Node.js 20.19+, Sailfish SDK with the selected build target, a
+checkout of `geastack/core` and the app to build. The default core checkout is
+`../core` relative to this Linux repository; pass `--core-repo` (Bash) or
+`-CoreRepository` (PowerShell) for another location. The examples below build
+an app from `geastack/examples`:
+
+```sh
+git clone https://github.com/geastack/linux.git
+git clone https://github.com/geastack/core.git
+git clone https://github.com/geastack/examples.git
+(cd examples && npm install)
+cd linux && npm ci
+```
 
 Code generation uses this repository's npm core, compiler, and plugin. The
 source manifest and native framework come from the core checkout. Preparation
-checks that the npm core and checkout package versions match and fails before
-code generation if they differ. Use `npm ci` for the locked tool dependencies
-and a matching core checkout. Local core edits are still included in the build.
+compares the `version` in this repository's
+`node_modules/@geastack/core/package.json` with the checkout's
+`packages/core/package.json` and fails before code generation if they differ;
+there is no flag or variable that skips the check. The lockfile pins the
+published `@geastack/core` that matches the core repository's `main` branch.
+For another core checkout, install the npm core of the same version from this
+Linux repository:
+
+```sh
+npm install --no-save @geastack/core@"$(node -p "require('../core/packages/core/package.json').version")"
+```
+
+Local core edits are still included in the build.
 
 From the Linux repository on Linux:
 
@@ -25,7 +43,9 @@ The script finds `sfdk` on `PATH`. Pass `--sfdk /path/to/SailfishOS/bin/sfdk`
 if it is elsewhere. `--prepare-only` runs code generation and stages the
 portable project without invoking `sfdk`.
 
-The app's `gea.icons` entry supplies the icon source. Preparation generates
+The app's `gea.icons` must have a `512`, `256` or `128` entry (the first one
+present is used) pointing at an existing image; preparation fails without
+one. It generates
 86, 108, 128, and 172 pixel PNGs for Harbour. For sandbox permissions, set
 `gea.sailfish.organizationName`, `applicationName`, and `permissions` in the
 app's `package.json`. The default identity is `org.geastack` and the app ID
@@ -51,9 +71,9 @@ The `i486` build is for the emulator; build for the architecture of the target
 device before publishing.
 
 The Windows script invokes the installed `sfdk.exe` with session handling off.
-The SDK build engine must be running. On this host, invoking `sfdk.exe` inside
-MSYS2 fails to identify its Docker engine, while the PowerShell invocation
-works. MSYS2 remains installed for the SDK's other command-line workflows.
+The SDK build engine must be running. Run the script from PowerShell: invoking
+`sfdk.exe` from an MSYS2 shell can fail to identify the SDK's Docker build
+engine.
 
 The Sailfish target owns its platform sources in `main/` and `include/`.
 Its SDL2 backend starts fullscreen with a scale of 1. Platform symbols and
@@ -82,6 +102,5 @@ runtime. Character coverage depends on the core checkout's runtime TTF
 rasterizer. Turkish text requires a core version that includes Latin Extended-A;
 the ASCII-only rasterizer does not provide those glyphs.
 
-The i486 RPM was installed on the Sailfish OS
-5.1.0.11 emulator; Tic Tac Toe rendered and mouse clicks changed the board.
-Physical device behavior has not been tested.
+The target has been run on the Sailfish OS 5.1.0.11 emulator (i486); it has not
+been tested on a physical device.

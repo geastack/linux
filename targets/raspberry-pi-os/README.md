@@ -8,16 +8,23 @@ we develop and test on; other distros can become sibling targets later.
 
 ## Build & run
 
+Apps opt in with `"raspberry-pi-os": true` under `gea.targets` in their
+`package.json` and depend on `@geastack/linux` and `@geastack/cli` (0.1.104 or
+later). From the app project:
+
 ```bash
-sudo apt install libsdl2-dev libcurl4-openssl-dev   # once
-bash targets/raspberry-pi-os/build-raspberry-pi-os.sh bouncing-balls-jsx
-./targets/raspberry-pi-os/dist/bouncing-balls-jsx/bouncing-balls-jsx
+sudo apt install build-essential pkg-config libsdl2-dev libcurl4-openssl-dev libfreetype-dev   # once
+npx gea build --target raspberry-pi-os
+./dist/raspberry-pi-os/<app-id>/<app-id>
 ```
 
-Apps are resolved from the app project root named by `GEA_APPS_ROOT` -- your
-own project, or a checkout of [geastack/examples](https://github.com/geastack/examples).
-There is no default, so set it. Apps opt in with `"raspberry-pi-os": true`
-under `gea.targets` in their `package.json`.
+`gea build` runs `build-raspberry-pi-os.sh <app-id>` from the installed
+package in the app folder; the script needs the CLI's environment
+(`GEA_CLI_BIN`) and exits when started on its own. Output lands under the app:
+the executable at `dist/raspberry-pi-os/<app-id>/<app-id>`, objects in
+`dist/raspberry-pi-os/<app-id>/build/`, generated C++ in
+`dist/raspberry-pi-os/.generated/<app-id>/`. `GEA_LINUX_OUTPUT_DIR` moves the
+tree. Cross-building for AArch64 is described in the repository README.
 
 Environment knobs (all optional):
 
@@ -72,8 +79,7 @@ Environment knobs (all optional):
   Redirects followed, gzip auto-decoded, `init.timeout_ms` honored
   (default 30 s).
 - **Wall-clock** — `Date`/`Clock.epochMs()` read the system clock
-  (`system_clock`/`gettimeofday`); no platform code is needed. The analog-clock example showing
-  10:10 is app-side (its store hardcodes the base time), not a platform gap.
+  (`system_clock`/`gettimeofday`); no platform code is needed.
 
 ## Architecture
 
@@ -108,41 +114,6 @@ macos build, the target filters out `host/camera.cpp` (no platform camera —
 a `<camera>` element renders nothing), `runtime.cpp` (this target runs its
 own frame loop), and the framework services (no mirror/diagnostics server
 yet). BLE reports no driver; audio is stubbed silent; the IMU returns zeros.
-
-## Verified (2026-07-14, Raspberry Pi 5) — new platform features
-
-- **fetch/HTTP(S)**: `maps` downloads OpenStreetMap tiles over the network
-  (`[tiles] … src=net`) and renders a full map; needed the WiFi status driver
-  (apps gate remote fetches on `wifi().connected()`).
-- **localStorage persistence**: standalone harness round-trips the storage
-  bridge — a value written by one process is read back by a second from
-  `localstorage.bin` (the localStorage-using example apps currently fail to
-  build for unrelated geatsc codegen reasons: weather/diagnostics/image-demo).
-- **Keyboard**: `reactive-counter` — ArrowUp/ArrowDown drive the count via
-  `queueKeyDown` → document keydown dispatch.
-- **Mouse wheel**: `virtual-list` — each wheel notch scrolls the 5000-row
-  list 48 px (`scrollByKeyStep` returns scrolled=1, `GEA_INPUT_TRACE=1`).
-- **Window resize**: `bouncing-balls-jsx` — resizing the window to 1200×600
-  reflows the viewport to 600×300 logical and the app fills the new bounds
-  (see the canvas-app frame-rate limitation above).
-- **Title/pause/expose**: window titles show app display names; minimizing
-  pauses the frame loop; restoring/exposing re-presents.
-
-## Verified (2026-07-13, Raspberry Pi 5)
-
-- `bouncing-balls-jsx` — renders and animates at ~100 fps, rAF firing every
-  frame.
-- `tic-tac-toe` — precision click on the center cell places the mark in that
-  cell (mouse → touch pipeline → gesture dispatch → store → re-render).
-- `analog-clock` — dial + hands render, digital seconds tick (the 10:10 base
-  is hardcoded in the app's store; platform `Date`/`Clock` return the system
-  wall-clock).
-- `css-animation-showcase` — rotate/opacity/color/scale/translate @keyframes
-  all animate (the declarative CSS engine is driven per-frame by the main
-  loop). Designed for a wider viewport; run with `GEA_RPIOS_WIDTH=600` to
-  avoid right-edge truncation.
-- `virtual-list` — drag-scroll works: a 150-logical-px drag scrolls exactly
-  150 px through the 5000-row virtualized list.
 
 ## Keyboard input
 
