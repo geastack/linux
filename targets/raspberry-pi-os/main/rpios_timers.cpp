@@ -7,6 +7,7 @@
 
 #include "event.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <pthread.h>
@@ -19,6 +20,7 @@ int millisSinceBoot()
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (int)(ts.tv_sec * 1000L + ts.tv_nsec / 1000000L);
 }
+std::atomic<int> g_prerender_time{-1};
 int g_frame_interval_ms = gea::framework::services::FrameScheduler::kDefaultFrameIntervalMs;
 
 struct LinuxEventQueue {
@@ -56,7 +58,16 @@ void pushEventLocked(const gea::framework::events::Event &event)
 }
 }  // namespace
 
-extern "C" int gea_embedded_now_ms(void) { return millisSinceBoot(); }
+void rpios_set_prerender_time(int timestampMs)
+{
+	g_prerender_time.store(timestampMs, std::memory_order_relaxed);
+}
+
+extern "C" int gea_embedded_now_ms(void)
+{
+	const int timestampMs = g_prerender_time.load(std::memory_order_relaxed);
+	return timestampMs >= 0 ? timestampMs : millisSinceBoot();
+}
 
 namespace gea::framework::services {
 

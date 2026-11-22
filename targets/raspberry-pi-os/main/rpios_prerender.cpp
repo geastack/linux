@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#include "app.h"
+#include "canvas.h"
+#include "css/declarative.h"
+#include "css/engine.h"
+#include "display.h"
+#include "host/timers.h"
+#include "platform/prerender_fonts.h"
+#include "platform/prerender_worker.h"
+#include "ui/style.h"
+#include "ui/tree_internal.h"
+
+#include <png.h>
+
+#include <algorithm>
+#include <bit>
+#include <charconv>
+#include <cstdio>
+#include <cstdlib>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+bool rpios_prepare_prerender(int width, int height);
+void rpios_set_prerender_time(int timestampMs);
+
+namespace {
+using gea::platform::prerender::Request;
+
+void loadPage(int width, int height, double dpr)
+{
+	if (!rpios_prepare_prerender(width, height)) {
+		throw std::runtime_error("Could not allocate the Linux prerender canvas");
+	}
+
+	rpios_set_prerender_time(0);
+	gea::host::resetAnimationFrameCallbacks();
+	gea::host::resetScheduledTimers();
+	gea::host::runAnimationFrameCallbacks(0);
+	gea::platform::display::Display::clearNoFlush();
+	gea::framework::app::Application::init(width, height, dpr);
+	if (gea::embedded::ui::Tree::instance().mountedRoot() < 0) {
+		throw std::runtime_error("Could not mount the page");
+	}
+
+	gea::css::DeclarativeAnimations::scanAndStart(0);
+}
+
+void drawFrames(int fps, int timestampMs)
+{
+	for (std::int64_t frame = 0;; ++frame) {
+		const auto tickMs = (frame * 1000 + fps / 2) / fps;
+		const int timeMs = static_cast<int>(std::min<std::int64_t>(tickMs, timestampMs));
+		rpios_set_prerender_time(timeMs);
+		gea::embedded::ui::StyleSheet::instance().startCssAnimations(timeMs);
+		gea::css::AnimationEngine::instance().tick(static_cast<std::uint32_t>(timeMs));
+		gea::framework::app::Application::frame(timeMs);
+		if (timeMs == timestampMs) return;
+	}
+}
+
+void writePng(const char *path, int width, int height)
+{
+	const auto *canvas = gea::platform::display::Display::canvas();
+	const auto *pixels = canvas->pixels();
+	int rowStride = canvas->strideBytes();
+	const auto *data = reinterpret_cast<const std::uint8_t *>(pixels);
+	std::vector<std::uint8_t> converted;
+
+	if constexpr (GEA_EMBEDDED_PIXEL_FORMAT != GEA_PIXEL_RGBA8888 || std::endian::native != std::endian::little) {
+		const auto stride = rowStride / sizeof(*pixels);
+		rowStride = width * 4;
+		converted.resize(static_cast<std::size_t>(rowStride) * height);
+		auto *destination = converted.data();
+
+		for (int y = 0; y < height; ++y) {
+			for (int x = 0; x < width; ++x) {
+				int red, green, blue, alpha;
+				gea::framework::graphics::pixel::unpackNative8(pixels[y * stride + x], &red, &green, &blue, &alpha);
+				*destination++ = static_cast<std::uint8_t>(red);
+				*destination++ = static_cast<std::uint8_t>(green);
+				*destination++ = static_cast<std::uint8_t>(blue);
+				*destination++ = static_cast<std::uint8_t>(alpha);
+			}
+		}
+
+		data = converted.data();
+	}
+
+	png_image image{};
+	image.version = PNG_IMAGE_VERSION;
+	image.width = width;
+	image.height = height;
+	image.format = PNG_FORMAT_RGBA;
+	const bool written = png_image_write_to_file(&image, path, 0, data, rowStride, nullptr) != 0;
+	const std::string error(image.message);
+	png_image_free(&image);
+	if (!written) throw std::runtime_error("Could not write PNG: " + error);
+}
+
+void capture(const Request &request, bool reuse)
+{
+	if (!reuse) {
+		if (setenv("GEA_PRERENDER_INPUT", request.input.c_str(), 1) != 0) {
+			throw std::runtime_error("Could not set prerender input");
+		}
+
+		loadPage(request.width, request.height, request.dpr);
+		drawFrames(60, 0);
+	}
+
+	writePng(request.out.c_str(), request.width, request.height);
+}
+
+template <typename Number>
+Number parseNumber(std::string_view value)
+{
+	Number number{};
+	auto result = std::from_chars(value.data(), value.data() + value.size(), number);
+	if (result.ec != std::errc{} || result.ptr != value.data() + value.size()) {
+		throw std::runtime_error("Invalid prerender argument");
+	}
+
+	return number;
+}
+}
+
+int rpios_prerender(int argc, char **argv)
+{
+	gea::platform::prerender::installFontProvider();
+	if (argc == 2 && std::string_view(argv[1]) == "--gea-prerender-worker") {
+		return gea::platform::prerender::runWorker(capture);
+	}
+
+	try {
+		if (argc != 8) throw std::runtime_error("Expected output, width, height, DPR, FPS and timestamp");
+		const int width = parseNumber<int>(argv[3]);
+		const int height = parseNumber<int>(argv[4]);
+		const double dpr = parseNumber<double>(argv[5]);
+		const int fps = parseNumber<int>(argv[6]);
+		const int timestampMs = parseNumber<int>(argv[7]);
+		if (!gea::platform::prerender::validViewport(width, height, dpr) || fps < 1 || fps > 1000 || timestampMs < 0) {
+			throw std::runtime_error("Invalid prerender viewport or clock");
+		}
+
+		loadPage(width, height, dpr);
+		drawFrames(fps, timestampMs);
+		writePng(argv[2], width, height);
+		return 0;
+	} catch (const std::exception &error) {
+		std::fprintf(stderr, "[rpios prerender] %s\n", error.what());
+		return 1;
+	}
+}

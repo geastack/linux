@@ -37,6 +37,24 @@ Environment knobs (all optional):
 | `GEA_RPIOS_STORAGE_DIR` | `$XDG_DATA_HOME/gea/<app-id>` (falls back to `~/.local/share/gea/<app-id>`) | where `localStorage` + settings persist |
 | `GEA_LOOP_PERF` | off | per-second `[rpios.loop]` fps/phase log |
 
+## Headless PNG capture
+
+Native builds with `libpng-dev` installed support prerendering without X11,
+Wayland, or an SDL window. Set `GEA_LINUX_PRERENDER_RGBA=1` when building
+to preserve 8-bit color channels in captures. The executable accepts the output path, physical
+width and height, DPR, FPS, and animation timestamp in milliseconds:
+
+```bash
+./dist/raspberry-pi-os/<app-id>/<app-id> --gea-prerender frame.png 1280 720 1 60 0
+```
+
+The `--gea-prerender-worker` mode accepts newline-delimited JSON requests on
+stdin. Each request supplies `input` and `out` paths and may specify `width`,
+`height`, `dpr`, and `reusePage`. The app can read the current input path
+from `GEA_PRERENDER_INPUT`. Set `reusePage: true` to capture an already
+mounted matching input and viewport. Replies include `ok`, `ms`, and
+`reusedPage` on success, or `ok: false` and the error on failure.
+
 ## Window & input
 
 - The window is **resizable** — drag the frame and the framework viewport
