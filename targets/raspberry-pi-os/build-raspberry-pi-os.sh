@@ -191,7 +191,10 @@ CROSS_FLAGS=()
 CURL_LIBS=(-lcurl)
 FONT_CFLAGS=()
 FONT_LIBS=()
+PNG_CFLAGS=()
+PNG_LIBS=()
 APP_LIBS=()
+PIXEL_CFLAGS=()
 if [[ -n "${GEA_LINUX_SYSROOT:-}" ]]; then
   [[ "$GEA_LINUX_SYSROOT" = /* && -d "$GEA_LINUX_SYSROOT/usr/lib/gcc/aarch64-linux-gnu/14" ]] || { echo "Cross build requires an absolute GCC14 AArch64 sysroot" >&2; exit 1; }
   : "${GEA_LINUX_SDL_ROOT:?Set staged SDL development root}"
@@ -217,6 +220,16 @@ else
   command -v pkg-config >/dev/null && pkg-config --exists freetype2 || { echo "Native Linux runtime fonts require FreeType development package (freetype2)" >&2; exit 1; }
   FONT_CFLAGS=($(pkg-config --cflags freetype2))
   FONT_LIBS=($(pkg-config --libs freetype2))
+  if pkg-config --exists libpng && [[ -f "$GEA_CORE/include/platform/prerender_fonts.h" && -f "$GEA_CORE/include/platform/prerender_worker.h" && -f "$GEA_CORE/prerender_worker.cpp" ]]; then
+    PNG_CFLAGS=(-DGEA_RPIOS_PRERENDER=1 $(pkg-config --cflags libpng))
+    PNG_LIBS=($(pkg-config --libs libpng))
+    CXX_SOURCES+=("$TARGET_DIR/main/rpios_prerender.cpp" "$GEA_CORE/prerender_worker.cpp")
+  fi
+fi
+
+if [[ "${GEA_LINUX_PRERENDER_RGBA:-0}" == 1 ]]; then
+  (( ${#PNG_LIBS[@]} > 0 )) || { echo "RGBA prerender requires native libpng development headers and a Core build with prerender support" >&2; exit 1; }
+  PIXEL_CFLAGS=(-DGEA_EMBEDDED_PIXEL_FORMAT=GEA_PIXEL_RGBA8888)
 fi
 
 while IFS= read -r directory; do [[ -z "$directory" ]] || INCLUDES+=(-I"$directory"); done < <(node -e 'for(const p of JSON.parse(process.argv[1]).nativeIncludeDirectories||[])console.log(p)' "$APP_LINK_RECORD")
@@ -226,7 +239,7 @@ CFLAGS_COMMON=(-O3 -DGEA_EMBEDDED_GIF_C_API -DGEA_EMBEDDED_HAS_GENERATED_FONTS=1
 CXXFLAGS_COMMON=(-std=c++20 -O3 -DGEA_EMBEDDED_HAS_GENERATED_FONTS=1 -DNDEBUG -funwind-tables \
   -DGEA_EMBEDDED_TTF_RUNTIME_FONTS=1 -DGEA_EMBEDDED_TTF_FREETYPE=1 -DGEA_CSS_FONT_STRETCH=1 \
   -DGEA_RPIOS_APP_ID="\"$APP_ID\"" -DGEA_RPIOS_APP_TITLE="\"$APP_NAME\"" \
-  -include "$TARGET_DIR/include/rpios_prelude.h" "${SDL_CFLAGS[@]}" "${FONT_CFLAGS[@]}" "${INCLUDES[@]}")
+  -include "$TARGET_DIR/include/rpios_prelude.h" "${SDL_CFLAGS[@]}" "${FONT_CFLAGS[@]}" "${PNG_CFLAGS[@]}" "${PIXEL_CFLAGS[@]}" "${INCLUDES[@]}")
 
 obj_for() {
   local rel="${1#"$GEA_CORE/../../"}"   # core-repo sources → package-relative
@@ -271,6 +284,6 @@ for pid in "${PIDS[@]}"; do wait "$pid" || fail=1; done
 (( fail == 0 )) || { echo "[rpios] compile failed" >&2; exit 1; }
 
 echo "[rpios] linking $DIST_DIR/$APP_ID"
-"$CXX" "${CROSS_FLAGS[@]}" -O3 -Wl,--export-dynamic -Xlinker -Map -Xlinker "$BUILD_DIR/link.map" -o "$DIST_DIR/$APP_ID" "${OBJS[@]}" ${APP_NATIVE_LIBRARIES[@]+"${APP_NATIVE_LIBRARIES[@]}"} "${SDL_LIBS[@]}" "${CURL_LIBS[@]}" "${FONT_LIBS[@]}" ${APP_LIBS[@]+"${APP_LIBS[@]}"} -lpthread -lm -lrt
+"$CXX" "${CROSS_FLAGS[@]}" -O3 -Wl,--export-dynamic -Xlinker -Map -Xlinker "$BUILD_DIR/link.map" -o "$DIST_DIR/$APP_ID" "${OBJS[@]}" ${APP_NATIVE_LIBRARIES[@]+"${APP_NATIVE_LIBRARIES[@]}"} "${SDL_LIBS[@]}" "${CURL_LIBS[@]}" "${FONT_LIBS[@]}" "${PNG_LIBS[@]}" ${APP_LIBS[@]+"${APP_LIBS[@]}"} -lpthread -lm -lrt
 file "$DIST_DIR/$APP_ID"
 echo "[rpios] built $DIST_DIR/$APP_ID"

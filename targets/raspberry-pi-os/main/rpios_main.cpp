@@ -63,6 +63,10 @@
 #include <signal.h>
 #include <execinfo.h>
 
+#if defined(GEA_RPIOS_PRERENDER)
+int rpios_prerender(int argc, char **argv);
+#endif
+
 extern "C" int gea_embedded_now_ms(void);
 extern "C" int rpios_canvas_width();
 extern "C" int rpios_canvas_height();
@@ -402,6 +406,16 @@ struct GeaNativeTerminationGuard {
 
 int main(int argc, char **argv)
 {
+	if (argc > 1 && (std::strcmp(argv[1], "--gea-prerender") == 0 ||
+	                 std::strcmp(argv[1], "--gea-prerender-worker") == 0)) {
+#if defined(GEA_RPIOS_PRERENDER)
+		return rpios_prerender(argc, argv);
+#else
+		std::fprintf(stderr, "This Linux build has no PNG support\n");
+		return 2;
+#endif
+	}
+
 	GeaNativeTerminationGuard terminationGuard;
 	(void)argc; (void)argv;
 
