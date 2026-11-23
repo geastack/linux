@@ -407,11 +407,12 @@ struct GeaNativeTerminationGuard {
 int main(int argc, char **argv)
 {
 	if (argc > 1 && (std::strcmp(argv[1], "--gea-prerender") == 0 ||
-	                 std::strcmp(argv[1], "--gea-prerender-worker") == 0)) {
+	                 std::strcmp(argv[1], "--gea-prerender-worker") == 0 ||
+	                 std::strcmp(argv[1], "--gea-prerender-video") == 0)) {
 #if defined(GEA_RPIOS_PRERENDER)
 		return rpios_prerender(argc, argv);
 #else
-		std::fprintf(stderr, "This Linux build has no PNG support\n");
+			std::fprintf(stderr, "This Linux build has no prerender support\n");
 		return 2;
 #endif
 	}
