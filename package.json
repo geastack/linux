@@ -1,6 +1,6 @@
 {
   "name": "@geastack/linux",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Native SDL2 targets for Raspberry Pi OS and Sailfish OS GeaStack apps.",
   "license": "Apache-2.0",
   "repository": {
@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@geastack/compiler": "^1.0.49",
-    "@geastack/core": "^0.1.55",
+    "@geastack/core": "^0.1.57",
     "@geastack/engine": "^0.1.26",
     "@geastack/geatsc-plugin-gea": "^0.1.28",
     "sharp": "^0.35.5"

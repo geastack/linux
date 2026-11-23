@@ -8,6 +8,10 @@
 #include "host/timers.h"
 #include "platform/prerender_fonts.h"
 #include "platform/prerender_worker.h"
+#if __has_include("platform/prerender_video.h")
+#include "platform/prerender_video.h"
+#define GEA_RPIOS_PRERENDER_VIDEO 1
+#endif
 #include "ui/style.h"
 #include "ui/tree_internal.h"
 
@@ -47,15 +51,20 @@ void loadPage(int width, int height, double dpr)
 	gea::css::DeclarativeAnimations::scanAndStart(0);
 }
 
+void paintFrame(int timeMs)
+{
+	rpios_set_prerender_time(timeMs);
+	gea::embedded::ui::StyleSheet::instance().startCssAnimations(timeMs);
+	gea::css::AnimationEngine::instance().tick(static_cast<std::uint32_t>(timeMs));
+	gea::framework::app::Application::frame(timeMs);
+}
+
 void drawFrames(int fps, int timestampMs)
 {
 	for (std::int64_t frame = 0;; ++frame) {
 		const auto tickMs = (frame * 1000 + fps / 2) / fps;
 		const int timeMs = static_cast<int>(std::min<std::int64_t>(tickMs, timestampMs));
-		rpios_set_prerender_time(timeMs);
-		gea::embedded::ui::StyleSheet::instance().startCssAnimations(timeMs);
-		gea::css::AnimationEngine::instance().tick(static_cast<std::uint32_t>(timeMs));
-		gea::framework::app::Application::frame(timeMs);
+		paintFrame(timeMs);
 		if (timeMs == timestampMs) return;
 	}
 }
@@ -134,7 +143,13 @@ int rpios_prerender(int argc, char **argv)
 	}
 
 	try {
-		if (argc != 8) throw std::runtime_error("Expected output, width, height, DPR, FPS and timestamp");
+		if (argc < 2) throw std::runtime_error("Expected a prerender command");
+		const bool video = std::string_view(argv[1]) == "--gea-prerender-video";
+		if (argc != (video ? 9 : 8)) {
+			throw std::runtime_error(video
+				? "Expected output, width, height, DPR, FPS, start time and end time"
+				: "Expected output, width, height, DPR, FPS and timestamp");
+		}
 		const int width = parseNumber<int>(argv[3]);
 		const int height = parseNumber<int>(argv[4]);
 		const double dpr = parseNumber<double>(argv[5]);
@@ -142,6 +157,20 @@ int rpios_prerender(int argc, char **argv)
 		const int timestampMs = parseNumber<int>(argv[7]);
 		if (!gea::platform::prerender::validViewport(width, height, dpr) || fps < 1 || fps > 1000 || timestampMs < 0) {
 			throw std::runtime_error("Invalid prerender viewport or clock");
+		}
+
+		if (video) {
+#if defined(GEA_RPIOS_PRERENDER_VIDEO)
+			const int endMs = parseNumber<int>(argv[8]);
+			if (endMs <= timestampMs) throw std::runtime_error("Invalid video time range");
+			gea::platform::prerender::VideoFrames stream(width, height);
+			gea::platform::prerender::VideoClock clock(fps);
+			loadPage(width, height, dpr);
+			gea::platform::prerender::streamVideoFrames(stream, fps, timestampMs, endMs, paintFrame);
+			return 0;
+#else
+			throw std::runtime_error("Rebuild against a Core version with prerender video support");
+#endif
 		}
 
 		loadPage(width, height, dpr);
