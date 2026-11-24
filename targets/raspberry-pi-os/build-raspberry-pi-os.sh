@@ -230,15 +230,16 @@ else
   command -v pkg-config >/dev/null && pkg-config --exists freetype2 || { echo "Native Linux runtime fonts require FreeType development package (freetype2)" >&2; exit 1; }
   FONT_CFLAGS=($(pkg-config --cflags freetype2))
   FONT_LIBS=($(pkg-config --libs freetype2))
-  if pkg-config --exists libpng && [[ -f "$GEA_CORE/include/platform/prerender_fonts.h" && -f "$GEA_CORE/include/platform/prerender_worker.h" && -f "$GEA_CORE/prerender_worker.cpp" ]]; then
-    PNG_CFLAGS=(-DGEA_RPIOS_PRERENDER=1 $(pkg-config --cflags libpng))
-    PNG_LIBS=($(pkg-config --libs libpng))
+  if command -v cargo >/dev/null && [[ -f "$GEA_CORE/include/platform/prerender_fonts.h" && -f "$GEA_CORE/include/platform/prerender_worker.h" && -f "$GEA_CORE/prerender_worker.cpp" ]]; then
+    cargo build --locked --release --manifest-path "$TARGET_DIR/png/Cargo.toml" --target-dir "$BUILD_DIR/png"
+    PNG_CFLAGS=(-DGEA_RPIOS_PRERENDER=1)
+    PNG_LIBS=("$BUILD_DIR/png/release/libgea_linux_png.a" -ldl)
     CXX_SOURCES+=("$TARGET_DIR/main/rpios_prerender.cpp" "$GEA_CORE/prerender_worker.cpp")
   fi
 fi
 
 if [[ "${GEA_LINUX_PRERENDER_RGBA:-0}" == 1 ]]; then
-  (( ${#PNG_LIBS[@]} > 0 )) || { echo "RGBA prerender requires native libpng development headers and a Core build with prerender support" >&2; exit 1; }
+  (( ${#PNG_LIBS[@]} > 0 )) || { echo "RGBA prerender requires Rust and Cargo and a Core build with prerender support" >&2; exit 1; }
   PIXEL_CFLAGS=(-DGEA_EMBEDDED_PIXEL_FORMAT=GEA_PIXEL_RGBA8888)
 fi
 
@@ -248,7 +249,7 @@ while IFS= read -r library; do [[ -z "$library" ]] || APP_LIBS+=("-l$library"); 
 GENERATED_FONT_CFLAGS=(-DGEA_EMBEDDED_HAS_GENERATED_FONTS=1)
 HTTP_CXXFLAGS=()
 if [[ -n "$HTTP_SOURCE" ]]; then
-  (( ${#PNG_LIBS[@]} > 0 )) || { echo "HTTP prerender requires native libpng" >&2; exit 1; }
+  (( ${#PNG_LIBS[@]} > 0 )) || { echo "HTTP prerender requires Rust and Cargo and a Core build with prerender support" >&2; exit 1; }
   : "${GEA_LINUX_PRERENDER_HTTP_INCLUDE:?Set the HTTP renderer host include directory}"
   : "${GEA_NODE_COMPAT_ROOT:?Set the node-compat source directory}"
   [[ -f "$HTTP_SOURCE" && -f "$GEA_NODE_COMPAT_ROOT/runtime/gea_node.hpp" ]] ||

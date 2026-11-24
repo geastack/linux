@@ -39,8 +39,9 @@ Environment knobs (all optional):
 
 ## Headless PNG capture
 
-Native builds with `libpng-dev` installed support prerendering without X11,
-Wayland, or an SDL window. Set `GEA_LINUX_PRERENDER_RGBA=1` when building
+Native builds with Rust and Cargo installed support prerendering without X11,
+Wayland, or an SDL window. PNG encoding links the Rust `png` crate statically.
+Set `GEA_LINUX_PRERENDER_RGBA=1` when building
 to preserve 8-bit color channels in captures. The executable accepts the output path, physical
 width and height, DPR, FPS, and animation timestamp in milliseconds:
 
