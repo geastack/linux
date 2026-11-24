@@ -235,6 +235,20 @@ fi
 while IFS= read -r directory; do [[ -z "$directory" ]] || INCLUDES+=(-I"$directory"); done < <(node -e 'for(const p of JSON.parse(process.argv[1]).nativeIncludeDirectories||[])console.log(p)' "$APP_LINK_RECORD")
 while IFS= read -r library; do [[ -z "$library" ]] || APP_LIBS+=("-l$library"); done < <(node -e 'for(const p of JSON.parse(process.argv[1]).nativeSystemLibraries||[])console.log(p)' "$APP_LINK_RECORD")
 
+HTTP_SOURCE="${GEA_LINUX_PRERENDER_HTTP_SOURCE:-}"
+HTTP_CXXFLAGS=()
+if [[ -n "$HTTP_SOURCE" ]]; then
+  (( ${#PNG_LIBS[@]} > 0 )) || { echo "HTTP prerender requires native libpng" >&2; exit 1; }
+  : "${GEA_LINUX_PRERENDER_HTTP_INCLUDE:?Set the HTTP renderer host include directory}"
+  : "${GEA_NODE_COMPAT_ROOT:?Set the node-compat source directory}"
+  [[ -f "$HTTP_SOURCE" && -f "$GEA_NODE_COMPAT_ROOT/runtime/gea_node.hpp" ]] ||
+    { echo "Missing compiled HTTP source or node-compat runtime" >&2; exit 1; }
+  CXX_SOURCES+=("$HTTP_SOURCE")
+  PNG_CFLAGS+=(-DGEA_RPIOS_PRERENDER_HTTP=1)
+  HTTP_CXXFLAGS=(-DGEA_NODE_USE_SYSTEM_ALLOCATOR=1 "-I$GEA_LINUX_PRERENDER_HTTP_INCLUDE"
+    "-I$GEA_NODE_COMPAT_ROOT/runtime" "-I$GEA_NODE_COMPAT_ROOT/runtime/node")
+fi
+
 CFLAGS_COMMON=(-O3 -DGEA_EMBEDDED_GIF_C_API -DGEA_EMBEDDED_HAS_GENERATED_FONTS=1 -funwind-tables "${INCLUDES[@]}")
 CXXFLAGS_COMMON=(-std=c++20 -O3 -DGEA_EMBEDDED_HAS_GENERATED_FONTS=1 -DNDEBUG -funwind-tables \
   -DGEA_EMBEDDED_TTF_RUNTIME_FONTS=1 -DGEA_EMBEDDED_TTF_FREETYPE=1 -DGEA_CSS_FONT_STRETCH=1 \
@@ -263,6 +277,11 @@ wait_slot() {
 
 compile_one() {
   local src="$1" obj="$2"
+  if [[ "$src" == "$HTTP_SOURCE" ]]; then
+    "$CXX" "${CROSS_FLAGS[@]}" "${CXXFLAGS_COMMON[@]}" "${HTTP_CXXFLAGS[@]}" -c "$src" -o "$obj"
+    return
+  fi
+
   case "$src" in
     *.c)  "$CC" "${CROSS_FLAGS[@]}" "${CFLAGS_COMMON[@]}"   -c "$src" -o "$obj" ;;
     *.cpp|*.cc|*.cxx|*.mm|*.m) "$CXX" "${CROSS_FLAGS[@]}" "${CXXFLAGS_COMMON[@]}" -x c++ -c "$src" -o "$obj" ;;

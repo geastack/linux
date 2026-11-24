@@ -22,6 +22,7 @@
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -69,7 +70,7 @@ void drawFrames(int fps, int timestampMs)
 	}
 }
 
-void writePng(const char *path, int width, int height)
+void writePng(const char *path, int width, int height, FILE *stream = nullptr)
 {
 	const auto *canvas = gea::platform::display::Display::canvas();
 	const auto *pixels = canvas->pixels();
@@ -102,7 +103,9 @@ void writePng(const char *path, int width, int height)
 	image.width = width;
 	image.height = height;
 	image.format = PNG_FORMAT_RGBA;
-	const bool written = png_image_write_to_file(&image, path, 0, data, rowStride, nullptr) != 0;
+	const bool written = stream
+		? png_image_write_to_stdio(&image, stream, 0, data, rowStride, nullptr) != 0
+		: png_image_write_to_file(&image, path, 0, data, rowStride, nullptr) != 0;
 	const std::string error(image.message);
 	png_image_free(&image);
 	if (!written) throw std::runtime_error("Could not write PNG: " + error);
@@ -122,6 +125,72 @@ void capture(const Request &request, bool reuse)
 	writePng(request.out.c_str(), request.width, request.height);
 }
 
+}
+
+#if defined(GEA_RPIOS_PRERENDER_HTTP)
+int gea_renderer_http_serve(int argc, char **argv);
+
+std::size_t rpios_capture_http_png(const char *input, bool reuse, const char **bytes)
+{
+	static constexpr int width = 1920;
+	static constexpr int height = 1080;
+	static std::string mountedInput;
+	static std::unique_ptr<char, decltype(&std::free)> png(nullptr, &std::free);
+	static std::size_t pngSize = 0;
+
+	*bytes = nullptr;
+	try {
+		if (!reuse || mountedInput != input) {
+			png.reset();
+			pngSize = 0;
+			mountedInput.clear();
+			if (setenv("GEA_PRERENDER_INPUT", input, 1) != 0) {
+				throw std::runtime_error("Could not set prerender input");
+			}
+
+			loadPage(width, height, 1);
+			drawFrames(60, 0);
+			mountedInput = input;
+		}
+
+		// A reused HTTP capture never advances the clock or redraws the canvas.
+		if (png) {
+			*bytes = png.get();
+			return pngSize;
+		}
+
+		char *buffer = nullptr;
+		std::size_t size = 0;
+		FILE *stream = open_memstream(&buffer, &size);
+		if (!stream) throw std::runtime_error("Could not open PNG memory stream");
+
+		try {
+			writePng(nullptr, width, height, stream);
+		} catch (...) {
+			std::fclose(stream);
+			std::free(buffer);
+			throw;
+		}
+
+		const int closed = std::fclose(stream);
+		if (closed != 0) {
+			std::free(buffer);
+			throw std::runtime_error("Could not finalize PNG memory stream");
+		}
+
+		png.reset(buffer);
+		pngSize = size;
+		*bytes = png.get();
+		return pngSize;
+	} catch (const std::exception &error) {
+		std::fprintf(stderr, "[rpios prerender] %s\n", error.what());
+		return 0;
+	}
+}
+
+#endif
+
+namespace {
 template <typename Number>
 Number parseNumber(std::string_view value)
 {
@@ -144,6 +213,15 @@ int rpios_prerender(int argc, char **argv)
 
 	try {
 		if (argc < 2) throw std::runtime_error("Expected a prerender command");
+		if (std::string_view(argv[1]) == "--gea-prerender-http") {
+#if defined(GEA_RPIOS_PRERENDER_HTTP)
+			if (argc != 2) throw std::runtime_error("Unexpected HTTP prerender arguments");
+			return gea_renderer_http_serve(argc, argv);
+#else
+			throw std::runtime_error("This Linux build has no HTTP prerender support");
+#endif
+		}
+
 		const bool video = std::string_view(argv[1]) == "--gea-prerender-video";
 		if (argc != (video ? 9 : 8)) {
 			throw std::runtime_error(video
