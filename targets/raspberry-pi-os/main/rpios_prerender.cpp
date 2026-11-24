@@ -15,11 +15,11 @@
 #include "ui/style.h"
 #include "ui/tree_internal.h"
 
-#include <png.h>
-
 #include <algorithm>
 #include <bit>
 #include <charconv>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -29,6 +29,10 @@
 
 bool rpios_prepare_prerender(int width, int height);
 void rpios_set_prerender_time(int timestampMs);
+
+extern "C" bool gea_linux_write_png(
+	const std::uint8_t *pixels, std::uint32_t width, std::uint32_t height, std::size_t stride,
+	bool fast, void *context, std::size_t (*writeBytes)(void *, const std::uint8_t *, std::size_t));
 
 namespace {
 using gea::platform::prerender::Request;
@@ -80,7 +84,16 @@ void drawFrames(int fps, int timestampMs)
 	}
 }
 
-void writePng(const char *path, int width, int height, FILE *stream = nullptr)
+bool fastPngFileCompression()
+{
+	const char *setting = std::getenv("GEA_PNG_COMPRESSION");
+	if (!setting || std::string_view(setting) == "compact") return false;
+	if (std::string_view(setting) == "fast") return true;
+	throw std::runtime_error("GEA_PNG_COMPRESSION must be fast or compact");
+}
+
+void writePng(const char *path, int width, int height, bool fast, FILE *stream = nullptr,
+	const char *mode = "wb")
 {
 	const auto *canvas = gea::platform::display::Display::canvas();
 	const auto *pixels = canvas->pixels();
@@ -108,18 +121,44 @@ void writePng(const char *path, int width, int height, FILE *stream = nullptr)
 		data = converted.data();
 	}
 
-	png_image image{};
-	image.version = PNG_IMAGE_VERSION;
-	image.width = width;
-	image.height = height;
-	image.format = PNG_FORMAT_RGBA;
-	const bool written = stream
-		? png_image_write_to_stdio(&image, stream, 0, data, rowStride, nullptr) != 0
-		: png_image_write_to_file(&image, path, 0, data, rowStride, nullptr) != 0;
-	const std::string error(image.message);
-	png_image_free(&image);
-	if (!written) throw std::runtime_error("Could not write PNG: " + error);
+	FILE *output = stream ? stream : std::fopen(path, mode);
+	if (!output) throw std::runtime_error("Could not open PNG output");
+
+	const bool written = gea_linux_write_png(
+		data, width, height, rowStride, fast, output,
+		[](void *context, const std::uint8_t *bytes, std::size_t size) {
+			return std::fwrite(bytes, 1, size, static_cast<FILE *>(context));
+		});
+	const bool closed = stream || std::fclose(output) == 0;
+	if (!written || !closed) throw std::runtime_error("Could not write PNG");
 }
+
+#if defined(GEA_RPIOS_PRERENDER_VIDEO)
+class PngFrames {
+public:
+	PngFrames(std::string_view path, int width, int height, std::int64_t count)
+		: path_(path), width_(width), height_(height),
+		  digits_(std::max<std::size_t>(6, std::to_string(count - 1).size())),
+		  fast_(fastPngFileCompression()) {}
+
+	void write()
+	{
+		const auto number = std::to_string(index_++);
+		const auto output = path_ + "/frame-" + std::string(digits_ - number.size(), '0') + number + ".png";
+		writePng(output.c_str(), width_, height_, fast_, nullptr, "wbx");
+	}
+
+	void finish() {}
+
+private:
+	std::string path_;
+	int width_;
+	int height_;
+	std::size_t digits_;
+	bool fast_;
+	std::int64_t index_ = 0;
+};
+#endif
 
 void capture(const Request &request, bool reuse)
 {
@@ -132,7 +171,7 @@ void capture(const Request &request, bool reuse)
 		drawFrames(60, 0);
 	}
 
-	writePng(request.out.c_str(), request.width, request.height);
+	writePng(request.out.c_str(), request.width, request.height, fastPngFileCompression());
 }
 
 }
@@ -169,7 +208,7 @@ void finishPage()
 	drawFrames(60, 0);
 }
 
-std::vector<std::uint8_t> capturePng()
+std::vector<std::uint8_t> capturePng(bool fast)
 {
 	char *bytes = nullptr;
 	std::size_t size = 0;
@@ -177,7 +216,7 @@ std::vector<std::uint8_t> capturePng()
 	if (!stream) throw std::runtime_error("Could not open PNG memory stream");
 
 	try {
-		writePng(nullptr, httpWidth, httpHeight, stream);
+		writePng(nullptr, httpWidth, httpHeight, fast, stream);
 	} catch (...) {
 		std::fclose(stream);
 		std::free(bytes);
@@ -224,7 +263,8 @@ int rpios_prerender(int argc, char **argv)
 #endif
 		}
 
-		const bool video = std::string_view(argv[1]) == "--gea-prerender-video";
+		const bool frames = std::string_view(argv[1]) == "--gea-prerender-frames";
+		const bool video = frames || std::string_view(argv[1]) == "--gea-prerender-video";
 		if (argc != (video ? 9 : 8)) {
 			throw std::runtime_error(video
 				? "Expected output, width, height, DPR, FPS, start time and end time"
@@ -243,10 +283,17 @@ int rpios_prerender(int argc, char **argv)
 #if defined(GEA_RPIOS_PRERENDER_VIDEO)
 			const int endMs = parseNumber<int>(argv[8]);
 			if (endMs <= timestampMs) throw std::runtime_error("Invalid video time range");
-			gea::platform::prerender::VideoFrames stream(width, height);
 			gea::platform::prerender::VideoClock clock(fps);
-			loadPage(width, height, dpr);
-			gea::platform::prerender::streamVideoFrames(stream, fps, timestampMs, endMs, paintFrame);
+			if (frames) {
+				const auto count = (static_cast<std::int64_t>(endMs - timestampMs) * fps + 999) / 1000;
+				PngFrames stream(argv[2], width, height, count);
+				loadPage(width, height, dpr);
+				gea::platform::prerender::streamVideoFrames(stream, fps, timestampMs, endMs, paintFrame);
+			} else {
+				gea::platform::prerender::VideoFrames stream(width, height);
+				loadPage(width, height, dpr);
+				gea::platform::prerender::streamVideoFrames(stream, fps, timestampMs, endMs, paintFrame);
+			}
 			return 0;
 #else
 			throw std::runtime_error("Rebuild against a Core version with prerender video support");
@@ -255,7 +302,7 @@ int rpios_prerender(int argc, char **argv)
 
 		loadPage(width, height, dpr);
 		drawFrames(fps, timestampMs);
-		writePng(argv[2], width, height);
+		writePng(argv[2], width, height, fastPngFileCompression());
 		return 0;
 	} catch (const std::exception &error) {
 		std::fprintf(stderr, "[rpios prerender] %s\n", error.what());
