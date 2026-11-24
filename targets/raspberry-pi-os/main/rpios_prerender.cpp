@@ -33,7 +33,7 @@ void rpios_set_prerender_time(int timestampMs);
 namespace {
 using gea::platform::prerender::Request;
 
-void loadPage(int width, int height, double dpr)
+void prepareCanvas(int width, int height)
 {
 	if (!rpios_prepare_prerender(width, height)) {
 		throw std::runtime_error("Could not allocate the Linux prerender canvas");
@@ -44,12 +44,22 @@ void loadPage(int width, int height, double dpr)
 	gea::host::resetScheduledTimers();
 	gea::host::runAnimationFrameCallbacks(0);
 	gea::platform::display::Display::clearNoFlush();
-	gea::framework::app::Application::init(width, height, dpr);
+}
+
+void startPageAnimations()
+{
 	if (gea::embedded::ui::Tree::instance().mountedRoot() < 0) {
 		throw std::runtime_error("Could not mount the page");
 	}
 
 	gea::css::DeclarativeAnimations::scanAndStart(0);
+}
+
+void loadPage(int width, int height, double dpr)
+{
+	prepareCanvas(width, height);
+	gea::framework::app::Application::init(width, height, dpr);
+	startPageAnimations();
 }
 
 void paintFrame(int timeMs)
@@ -130,64 +140,55 @@ void capture(const Request &request, bool reuse)
 #if defined(GEA_RPIOS_PRERENDER_HTTP)
 int gea_renderer_http_serve(int argc, char **argv);
 
-std::size_t rpios_capture_http_png(const char *input, bool reuse, const char **bytes)
-{
-	static constexpr int width = 1920;
-	static constexpr int height = 1080;
-	static std::string mountedInput;
-	static std::unique_ptr<char, decltype(&std::free)> png(nullptr, &std::free);
-	static std::size_t pngSize = 0;
-
-	*bytes = nullptr;
-	try {
-		if (!reuse || mountedInput != input) {
-			png.reset();
-			pngSize = 0;
-			mountedInput.clear();
-			if (setenv("GEA_PRERENDER_INPUT", input, 1) != 0) {
-				throw std::runtime_error("Could not set prerender input");
-			}
-
-			loadPage(width, height, 1);
-			drawFrames(60, 0);
-			mountedInput = input;
-		}
-
-		// A reused HTTP capture never advances the clock or redraws the canvas.
-		if (png) {
-			*bytes = png.get();
-			return pngSize;
-		}
-
-		char *buffer = nullptr;
-		std::size_t size = 0;
-		FILE *stream = open_memstream(&buffer, &size);
-		if (!stream) throw std::runtime_error("Could not open PNG memory stream");
-
-		try {
-			writePng(nullptr, width, height, stream);
-		} catch (...) {
-			std::fclose(stream);
-			std::free(buffer);
-			throw;
-		}
-
-		const int closed = std::fclose(stream);
-		if (closed != 0) {
-			std::free(buffer);
-			throw std::runtime_error("Could not finalize PNG memory stream");
-		}
-
-		png.reset(buffer);
-		pngSize = size;
-		*bytes = png.get();
-		return pngSize;
-	} catch (const std::exception &error) {
-		std::fprintf(stderr, "[rpios prerender] %s\n", error.what());
-		return 0;
-	}
+namespace {
+constexpr int httpWidth = 1920;
+constexpr int httpHeight = 1080;
+bool servingHttp = false;
 }
 
+bool httpPrerenderMode()
+{
+	return servingHttp;
+}
+
+void preparePage()
+{
+	prepareCanvas(httpWidth, httpHeight);
+	gea::framework::app::Application::prepareMount(httpWidth, httpHeight, 1);
+}
+
+void abortPage()
+{
+	gea::framework::app::Application::finishMount(false);
+}
+
+void finishPage()
+{
+	gea::framework::app::Application::finishMount(true);
+	startPageAnimations();
+	drawFrames(60, 0);
+}
+
+std::vector<std::uint8_t> capturePng()
+{
+	char *bytes = nullptr;
+	std::size_t size = 0;
+	FILE *stream = open_memstream(&bytes, &size);
+	if (!stream) throw std::runtime_error("Could not open PNG memory stream");
+
+	try {
+		writePng(nullptr, httpWidth, httpHeight, stream);
+	} catch (...) {
+		std::fclose(stream);
+		std::free(bytes);
+		throw;
+	}
+
+	const int closed = std::fclose(stream);
+	std::unique_ptr<char, decltype(&std::free)> png(bytes, &std::free);
+	if (closed != 0) throw std::runtime_error("Could not finalize PNG memory stream");
+	return {bytes, bytes + size};
+}
 #endif
 
 namespace {
@@ -216,6 +217,7 @@ int rpios_prerender(int argc, char **argv)
 		if (std::string_view(argv[1]) == "--gea-prerender-http") {
 #if defined(GEA_RPIOS_PRERENDER_HTTP)
 			if (argc != 2) throw std::runtime_error("Unexpected HTTP prerender arguments");
+			servingHttp = true;
 			return gea_renderer_http_serve(argc, argv);
 #else
 			throw std::runtime_error("This Linux build has no HTTP prerender support");

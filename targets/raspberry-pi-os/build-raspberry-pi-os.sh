@@ -91,7 +91,10 @@ while IFS= read -r plugin; do
   EXTRA_PLUGIN_ARGS+=(--extra-geatsc-plugin "$plugin")
 done < <(node -e 'const p=require("path"),a=JSON.parse(process.argv[1]);for(const x of a.compilerPlugins||[])console.log(p.resolve(a.root,x))' "$APP_META")
 
-if needs_regen; then
+HTTP_SOURCE="${GEA_LINUX_PRERENDER_HTTP_SOURCE:-}"
+if [[ -n "$HTTP_SOURCE" ]]; then
+  [[ -f "$HTTP_SOURCE" ]] || { echo "Missing compiled HTTP and renderer source: $HTTP_SOURCE" >&2; exit 1; }
+elif needs_regen; then
   echo "[rpios] generating C++ for $APP_ID from $APP_DIR/$APP_ENTRY"
   node "$GEA_CORE/scripts/build-gea-vite-geatsc.mjs" \
     --app-dir "$APP_DIR" --entry "$APP_ENTRY" --out-dir "$GENERATED_DIR" \
@@ -114,7 +117,7 @@ if needs_regen; then
   mkdir -p "$BUILD_DIR/objs"
 fi
 
-[[ -s "$SOURCE_LIST" ]] || { echo "Missing native generated source list" >&2; exit 1; }
+[[ -n "$HTTP_SOURCE" || -s "$SOURCE_LIST" ]] || { echo "Missing native generated source list" >&2; exit 1; }
 
 # host/*.cpp files do `#include "gea_runtime.cpp"` to pull in the gea_cpp_value
 # runtime; write the one-line wrapper into the generated dir (same as macos/esp32).
@@ -160,12 +163,14 @@ CXX_SOURCES+=(
 # Single-app entry (no resident registry).
 CXX_SOURCES+=("$GEA_CORE/gea_app_entry.cpp")
 if [[ -f "$GEA_GEAOS/resident_apps.cpp" ]]; then CXX_SOURCES+=("$GEA_GEAOS/resident_apps.cpp"); fi
-while IFS= read -r __src; do
-  [[ -n "$__src" && -f "$__src" ]] && CXX_SOURCES+=("$__src")
-done < "$SOURCE_LIST"
-for gen in gea_embedded_font_generated.cpp gea_embedded_assets_generated.cpp; do
-  [[ -f "$GENERATED_DIR/$gen" ]] && CXX_SOURCES+=("$GENERATED_DIR/$gen")
-done
+if [[ -z "$HTTP_SOURCE" ]]; then
+  while IFS= read -r __src; do
+    [[ -n "$__src" && -f "$__src" ]] && CXX_SOURCES+=("$__src")
+  done < "$SOURCE_LIST"
+  for gen in gea_embedded_font_generated.cpp gea_embedded_assets_generated.cpp; do
+    [[ -f "$GENERATED_DIR/$gen" ]] && CXX_SOURCES+=("$GENERATED_DIR/$gen")
+  done
+fi
 
 # App-owned native providers are explicit manifest inputs, not target hardcodes.
 while IFS= read -r native; do
@@ -235,7 +240,7 @@ fi
 while IFS= read -r directory; do [[ -z "$directory" ]] || INCLUDES+=(-I"$directory"); done < <(node -e 'for(const p of JSON.parse(process.argv[1]).nativeIncludeDirectories||[])console.log(p)' "$APP_LINK_RECORD")
 while IFS= read -r library; do [[ -z "$library" ]] || APP_LIBS+=("-l$library"); done < <(node -e 'for(const p of JSON.parse(process.argv[1]).nativeSystemLibraries||[])console.log(p)' "$APP_LINK_RECORD")
 
-HTTP_SOURCE="${GEA_LINUX_PRERENDER_HTTP_SOURCE:-}"
+GENERATED_FONT_CFLAGS=(-DGEA_EMBEDDED_HAS_GENERATED_FONTS=1)
 HTTP_CXXFLAGS=()
 if [[ -n "$HTTP_SOURCE" ]]; then
   (( ${#PNG_LIBS[@]} > 0 )) || { echo "HTTP prerender requires native libpng" >&2; exit 1; }
@@ -245,12 +250,15 @@ if [[ -n "$HTTP_SOURCE" ]]; then
     { echo "Missing compiled HTTP source or node-compat runtime" >&2; exit 1; }
   CXX_SOURCES+=("$HTTP_SOURCE")
   PNG_CFLAGS+=(-DGEA_RPIOS_PRERENDER_HTTP=1)
-  HTTP_CXXFLAGS=(-DGEA_NODE_USE_SYSTEM_ALLOCATOR=1 "-I$GEA_LINUX_PRERENDER_HTTP_INCLUDE"
+  APP_LIBS+=(-larchive)
+  GENERATED_FONT_CFLAGS=()
+  HTTP_CXXFLAGS=(-DGEA_NODE_USE_SYSTEM_ALLOCATOR=1 -DGEA_HOST_DECLARED=1
+    -include "$GEA_CORE/include/gea/embedded.h" "-I$GEA_COMPILER_RUNTIME" "-I$GEA_LINUX_PRERENDER_HTTP_INCLUDE"
     "-I$GEA_NODE_COMPAT_ROOT/runtime" "-I$GEA_NODE_COMPAT_ROOT/runtime/node")
 fi
 
-CFLAGS_COMMON=(-O3 -DGEA_EMBEDDED_GIF_C_API -DGEA_EMBEDDED_HAS_GENERATED_FONTS=1 -funwind-tables "${INCLUDES[@]}")
-CXXFLAGS_COMMON=(-std=c++20 -O3 -DGEA_EMBEDDED_HAS_GENERATED_FONTS=1 -DNDEBUG -funwind-tables \
+CFLAGS_COMMON=(-O3 -DGEA_EMBEDDED_GIF_C_API "${GENERATED_FONT_CFLAGS[@]}" -funwind-tables "${INCLUDES[@]}")
+CXXFLAGS_COMMON=(-std=c++20 -O3 "${GENERATED_FONT_CFLAGS[@]}" -DNDEBUG -funwind-tables \
   -DGEA_EMBEDDED_TTF_RUNTIME_FONTS=1 -DGEA_EMBEDDED_TTF_FREETYPE=1 -DGEA_CSS_FONT_STRETCH=1 \
   -DGEA_RPIOS_APP_ID="\"$APP_ID\"" -DGEA_RPIOS_APP_TITLE="\"$APP_NAME\"" \
   -include "$TARGET_DIR/include/rpios_prelude.h" "${SDL_CFLAGS[@]}" "${FONT_CFLAGS[@]}" "${PNG_CFLAGS[@]}" "${PIXEL_CFLAGS[@]}" "${INCLUDES[@]}")
@@ -278,7 +286,7 @@ wait_slot() {
 compile_one() {
   local src="$1" obj="$2"
   if [[ "$src" == "$HTTP_SOURCE" ]]; then
-    "$CXX" "${CROSS_FLAGS[@]}" "${CXXFLAGS_COMMON[@]}" "${HTTP_CXXFLAGS[@]}" -c "$src" -o "$obj"
+    "$CXX" "${CROSS_FLAGS[@]}" "${HTTP_CXXFLAGS[@]}" "${CXXFLAGS_COMMON[@]}" -c "$src" -o "$obj"
     return
   fi
 
