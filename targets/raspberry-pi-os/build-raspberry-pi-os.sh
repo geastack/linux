@@ -94,6 +94,9 @@ done < <(node -e 'const p=require("path"),a=JSON.parse(process.argv[1]);for(cons
 HTTP_SOURCE="${GEA_LINUX_PRERENDER_HTTP_SOURCE:-}"
 if [[ -n "$HTTP_SOURCE" ]]; then
   [[ -f "$HTTP_SOURCE" ]] || { echo "Missing compiled HTTP and renderer source: $HTTP_SOURCE" >&2; exit 1; }
+  # The engine's scalable text path requires the generated font registry even
+  # when all font faces are registered from uploaded documents at runtime.
+  node "$GEA_CORE/scripts/generate-gea-embedded-fonts.mjs" +    --app-dir "$BUILD_DIR" --css-dir "$BUILD_DIR" --runtime-ttf-fonts +    --out-cpp "$BUILD_DIR/gea_embedded_font_generated.cpp" +    --out-h "$BUILD_DIR/gea_embedded_font_generated.h"
 elif needs_regen; then
   echo "[rpios] generating C++ for $APP_ID from $APP_DIR/$APP_ENTRY"
   node "$GEA_CORE/scripts/build-gea-vite-geatsc.mjs" \
@@ -170,6 +173,8 @@ if [[ -z "$HTTP_SOURCE" ]]; then
   for gen in gea_embedded_font_generated.cpp gea_embedded_assets_generated.cpp; do
     [[ -f "$GENERATED_DIR/$gen" ]] && CXX_SOURCES+=("$GENERATED_DIR/$gen")
   done
+else
+  CXX_SOURCES+=("$BUILD_DIR/gea_embedded_font_generated.cpp")
 fi
 
 # App-owned native providers are explicit manifest inputs, not target hardcodes.
@@ -251,7 +256,6 @@ if [[ -n "$HTTP_SOURCE" ]]; then
   CXX_SOURCES+=("$HTTP_SOURCE")
   PNG_CFLAGS+=(-DGEA_RPIOS_PRERENDER_HTTP=1)
   APP_LIBS+=(-larchive)
-  GENERATED_FONT_CFLAGS=()
   HTTP_CXXFLAGS=(-DGEA_NODE_USE_SYSTEM_ALLOCATOR=1 -DGEA_HOST_DECLARED=1
     -include "$GEA_CORE/include/gea/embedded.h" "-I$GEA_COMPILER_RUNTIME" "-I$GEA_LINUX_PRERENDER_HTTP_INCLUDE"
     "-I$GEA_NODE_COMPAT_ROOT/runtime" "-I$GEA_NODE_COMPAT_ROOT/runtime/node")
