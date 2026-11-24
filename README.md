@@ -93,6 +93,16 @@ raster through a desktop window system. This repo is the Linux platform
 adapter layer. It owns the SDL2 display/input glue, the Linux storage/network
 backends, and Linux-specific target build scripts.
 
+## Headless HTTP prerender
+
+The HTML Renderer Cloudflare build compiles its HTTP server with geatsc
+and supplies the generated C++ through `GEA_LINUX_PRERENDER_HTTP_SOURCE`.
+The build also takes the app host headers in
+`GEA_LINUX_PRERENDER_HTTP_INCLUDE` and the node-compat checkout in
+`GEA_NODE_COMPAT_ROOT`. It links the server into the Linux renderer, which
+starts it with `--gea-prerender-http`. This mode requires the native libpng
+development package.
+
 ## Maintenance Notes
 
 - Framework sources and include roots come from the shared manifest

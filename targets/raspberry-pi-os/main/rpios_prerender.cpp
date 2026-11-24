@@ -22,6 +22,7 @@
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -32,7 +33,7 @@ void rpios_set_prerender_time(int timestampMs);
 namespace {
 using gea::platform::prerender::Request;
 
-void loadPage(int width, int height, double dpr)
+void prepareCanvas(int width, int height)
 {
 	if (!rpios_prepare_prerender(width, height)) {
 		throw std::runtime_error("Could not allocate the Linux prerender canvas");
@@ -43,12 +44,22 @@ void loadPage(int width, int height, double dpr)
 	gea::host::resetScheduledTimers();
 	gea::host::runAnimationFrameCallbacks(0);
 	gea::platform::display::Display::clearNoFlush();
-	gea::framework::app::Application::init(width, height, dpr);
+}
+
+void startPageAnimations()
+{
 	if (gea::embedded::ui::Tree::instance().mountedRoot() < 0) {
 		throw std::runtime_error("Could not mount the page");
 	}
 
 	gea::css::DeclarativeAnimations::scanAndStart(0);
+}
+
+void loadPage(int width, int height, double dpr)
+{
+	prepareCanvas(width, height);
+	gea::framework::app::Application::init(width, height, dpr);
+	startPageAnimations();
 }
 
 void paintFrame(int timeMs)
@@ -69,7 +80,7 @@ void drawFrames(int fps, int timestampMs)
 	}
 }
 
-void writePng(const char *path, int width, int height)
+void writePng(const char *path, int width, int height, FILE *stream = nullptr)
 {
 	const auto *canvas = gea::platform::display::Display::canvas();
 	const auto *pixels = canvas->pixels();
@@ -102,7 +113,9 @@ void writePng(const char *path, int width, int height)
 	image.width = width;
 	image.height = height;
 	image.format = PNG_FORMAT_RGBA;
-	const bool written = png_image_write_to_file(&image, path, 0, data, rowStride, nullptr) != 0;
+	const bool written = stream
+		? png_image_write_to_stdio(&image, stream, 0, data, rowStride, nullptr) != 0
+		: png_image_write_to_file(&image, path, 0, data, rowStride, nullptr) != 0;
 	const std::string error(image.message);
 	png_image_free(&image);
 	if (!written) throw std::runtime_error("Could not write PNG: " + error);
@@ -122,6 +135,63 @@ void capture(const Request &request, bool reuse)
 	writePng(request.out.c_str(), request.width, request.height);
 }
 
+}
+
+#if defined(GEA_RPIOS_PRERENDER_HTTP)
+int gea_renderer_http_serve(int argc, char **argv);
+
+namespace {
+constexpr int httpWidth = 1920;
+constexpr int httpHeight = 1080;
+bool servingHttp = false;
+}
+
+bool httpPrerenderMode()
+{
+	return servingHttp;
+}
+
+void preparePage()
+{
+	prepareCanvas(httpWidth, httpHeight);
+	gea::framework::app::Application::prepareMount(httpWidth, httpHeight, 1);
+}
+
+void abortPage()
+{
+	gea::framework::app::Application::finishMount(false);
+}
+
+void finishPage()
+{
+	gea::framework::app::Application::finishMount(true);
+	startPageAnimations();
+	drawFrames(60, 0);
+}
+
+std::vector<std::uint8_t> capturePng()
+{
+	char *bytes = nullptr;
+	std::size_t size = 0;
+	FILE *stream = open_memstream(&bytes, &size);
+	if (!stream) throw std::runtime_error("Could not open PNG memory stream");
+
+	try {
+		writePng(nullptr, httpWidth, httpHeight, stream);
+	} catch (...) {
+		std::fclose(stream);
+		std::free(bytes);
+		throw;
+	}
+
+	const int closed = std::fclose(stream);
+	std::unique_ptr<char, decltype(&std::free)> png(bytes, &std::free);
+	if (closed != 0) throw std::runtime_error("Could not finalize PNG memory stream");
+	return {bytes, bytes + size};
+}
+#endif
+
+namespace {
 template <typename Number>
 Number parseNumber(std::string_view value)
 {
@@ -144,6 +214,16 @@ int rpios_prerender(int argc, char **argv)
 
 	try {
 		if (argc < 2) throw std::runtime_error("Expected a prerender command");
+		if (std::string_view(argv[1]) == "--gea-prerender-http") {
+#if defined(GEA_RPIOS_PRERENDER_HTTP)
+			if (argc != 2) throw std::runtime_error("Unexpected HTTP prerender arguments");
+			servingHttp = true;
+			return gea_renderer_http_serve(argc, argv);
+#else
+			throw std::runtime_error("This Linux build has no HTTP prerender support");
+#endif
+		}
+
 		const bool video = std::string_view(argv[1]) == "--gea-prerender-video";
 		if (argc != (video ? 9 : 8)) {
 			throw std::runtime_error(video
