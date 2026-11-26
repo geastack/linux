@@ -99,8 +99,8 @@ test('system libraries and pkg-config modules are plain names', () => {
 })
 
 test('spec lists pkg-config modules as BuildRequires', () => {
-  const spec = rpmSpec(read({ sailfish: { pkgConfigModules: ['glib-2.0', 'maliit-glib'] } }))
-  assert.match(spec, /BuildRequires: pkgconfig\(libcurl\)\nBuildRequires: pkgconfig\(maliit-glib\)\nBuildRequires: pkgconfig\(glib-2.0\)\n\n%description/)
+  const spec = rpmSpec(read({ sailfish: { pkgConfigModules: ['glib-2.0', 'zlib'] } }))
+  assert.match(spec, /BuildRequires: pkgconfig\(libcurl\)\nBuildRequires: pkgconfig\(gio-2\.0\)\nBuildRequires: pkgconfig\(glib-2\.0\)\nBuildRequires: pkgconfig\(zlib\)\n\n%description/)
   assert.match(spec, /^Name: harbour-gea-probe-app\nVersion: 1\.2\.3\n/)
 })
 

@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
-pkg_check_modules(MALIIT REQUIRED IMPORTED_TARGET maliit-glib)
+pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 include(${CMAKE_CURRENT_SOURCE_DIR}/sources.cmake)
 
 add_executable(${GEA_PACKAGE_NAME} ${GEA_C_SOURCES} ${GEA_CXX_SOURCES})
@@ -32,7 +32,7 @@ target_compile_definitions(${GEA_PACKAGE_NAME} PRIVATE
   GEA_SAILFISH_APPLICATION_NAME="${GEA_SAILFISH_APPLICATION_NAME}")
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/main/sailfish_main.cpp
   PROPERTIES COMPILE_DEFINITIONS GEA_SAILFISH_DEFAULT_DPR=${GEA_SAILFISH_DEFAULT_DPR})
-target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL PkgConfig::MALIIT pthread m rt)
+target_link_libraries(${GEA_PACKAGE_NAME} PRIVATE PkgConfig::SDL2 PkgConfig::CURL PkgConfig::GIO pthread m rt)
 # App-declared link dependencies (gea.sailfish.pkgConfigModules and
 # nativeSystemLibraries); the spec lists each module as a BuildRequires.
 foreach(GEA_APP_PKG_MODULE IN LISTS GEA_APP_PKG_MODULES)

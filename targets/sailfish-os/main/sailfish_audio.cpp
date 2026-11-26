@@ -349,7 +349,7 @@ public:
 	bool playPcm(const std::int16_t *samples, std::size_t sampleCount, int sampleRate, int channels)
 	{
 		ensureSetup();
-		if (samples == nullptr || sampleCount == 0 || device_ == 0) return false;
+		if (samples == nullptr || sampleCount == 0 || (device_ == 0 && !testMode_)) return false;
 		if (channels < 1) channels = 1;
 		if (channels > 2) channels = 2;
 		if (sampleRate <= 0) sampleRate = 16000;
@@ -377,10 +377,10 @@ public:
 			stereo[i * 2u + 1u] = r0 + (r1 - r0) * frac;
 		}
 
-		SDL_LockAudioDevice(device_);
+		if (!testMode_) SDL_LockAudioDevice(device_);
 		pcmStereo_.swap(stereo);
 		pcmCursor_ = 0;
-		SDL_UnlockAudioDevice(device_);
+		if (!testMode_) SDL_UnlockAudioDevice(device_);
 		return true;
 	}
 
@@ -392,6 +392,10 @@ public:
 		Uint8 *wavBuf = nullptr;
 		Uint32 wavLen = 0;
 		if (SDL_LoadWAV(path.c_str(), &wavSpec, &wavBuf, &wavLen) == nullptr) return false;
+		if (wavLen == 0) {
+			SDL_FreeWAV(wavBuf);
+			return false;
+		}
 
 		SDL_AudioCVT cvt{};
 		const int outRate = static_cast<int>(std::llround(sampleRate_.load(std::memory_order_relaxed)));
@@ -421,21 +425,59 @@ public:
 		}
 		SDL_FreeWAV(wavBuf);
 
-		SDL_LockAudioDevice(device_);
+		if (!testMode_) SDL_LockAudioDevice(device_);
 		pcmStereo_.swap(stereo);
 		pcmCursor_ = 0;
-		SDL_UnlockAudioDevice(device_);
+		if (!testMode_) SDL_UnlockAudioDevice(device_);
 		return true;
 	}
 
 	void stopPlayback()
 	{
-		if (device_ == 0) return;
+		if (device_ == 0) {
+			if (testMode_) {
+				pcmStereo_.clear();
+				pcmCursor_ = 0;
+			}
+			return;
+		}
 		SDL_LockAudioDevice(device_);
 		pcmStereo_.clear();
 		pcmCursor_ = 0;
 		SDL_UnlockAudioDevice(device_);
 	}
+
+#ifdef GEA_SAILFISH_AUDIO_TEST
+	void resetForTest(double sampleRate)
+	{
+		std::lock_guard<std::mutex> guard(setupMutex_);
+		std::lock_guard<std::mutex> recGuard(recordsMutex_);
+		testMode_ = true;
+		setupDone_.store(true, std::memory_order_release);
+		running_.store(true, std::memory_order_release);
+		sampleRate_.store(sampleRate > 0.0 ? sampleRate : kDefaultSampleRate, std::memory_order_relaxed);
+		const double rate = sampleRate_.load(std::memory_order_relaxed);
+		attackFrames_ = std::max(1.0, kAttackSeconds * rate);
+		releaseFrames_ = std::max(1.0, kReleaseSeconds * rate);
+		frameOffset_.store(0, std::memory_order_relaxed);
+		renderedFrames_.store(0, std::memory_order_relaxed);
+		volume_.store(100, std::memory_order_relaxed);
+		device_ = 0;
+		for (auto &rec : records_) rec = OscillatorRecord{};
+		nextSlot_ = 0;
+		generation_ = 0;
+		Command discard;
+		while (commands_.pop(discard)) {}
+		for (auto &v : voices_) v = Voice{};
+		pcmStereo_.clear();
+		pcmCursor_ = 0;
+	}
+
+	void renderForTest(float *interleaved, std::size_t frameCount)
+	{
+		renderStereoFloat(interleaved, frameCount);
+	}
+#endif
 
 private:
 	Engine() = default;
@@ -455,11 +497,15 @@ private:
 		}
 
 		// Sailfish OS PulseAudio policy ignores system volume controls for
-		// streams without a recognized media.role. Use x-maemo unless the
-		// caller explicitly overrides it.
-		setenv("PULSE_PROP_media.role", "x-maemo", 0);
+		// streams without a recognized media.role. main() sets these before
+		// spawning threads; only fill them in here if still unset.
+		if (std::getenv("PULSE_PROP_media.role") == nullptr) {
+			setenv("PULSE_PROP_media.role", "x-maemo", 0);
+		}
 #ifdef GEA_SAILFISH_APP_TITLE
-		setenv("PULSE_PROP_application.name", GEA_SAILFISH_APP_TITLE, 0);
+		if (std::getenv("PULSE_PROP_application.name") == nullptr) {
+			setenv("PULSE_PROP_application.name", GEA_SAILFISH_APP_TITLE, 0);
+		}
 #endif
 
 		if ((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0) {
@@ -521,6 +567,7 @@ private:
 
 	void renderStereoFloat(float *interleaved, std::size_t frameCount)
 	{
+		if (interleaved == nullptr || frameCount == 0) return;
 		Command command;
 		while (commands_.pop(command)) applyCommand(command);
 
@@ -677,9 +724,25 @@ private:
 		case CommandKind::ScheduleFrequency: {
 			Voice *voice = findVoice(command.voice);
 			if (voice == nullptr || voice->eventCount >= kMaxVoiceEvents) return;
-			const int slot = (voice->eventHead + voice->eventCount) % kMaxVoiceEvents;
-			voice->events[slot] =
-				VoiceEvent{command.frame, command.frequency / sampleRate_.load(std::memory_order_relaxed)};
+			const double rate = sampleRate_.load(std::memory_order_relaxed);
+			const VoiceEvent incoming{command.frame, command.frequency / rate};
+			// Keep the small ring sorted by sample frame so out-of-order
+			// setValueAtTime calls fire in chronological order.
+			const int n = voice->eventCount;
+			int insertPos = n;
+			for (int i = 0; i < n; ++i) {
+				const int idx = (voice->eventHead + i) % kMaxVoiceEvents;
+				if (incoming.frame < voice->events[idx].frame) {
+					insertPos = i;
+					break;
+				}
+			}
+			for (int i = n; i > insertPos; --i) {
+				const int dst = (voice->eventHead + i) % kMaxVoiceEvents;
+				const int src = (voice->eventHead + i - 1) % kMaxVoiceEvents;
+				voice->events[dst] = voice->events[src];
+			}
+			voice->events[(voice->eventHead + insertPos) % kMaxVoiceEvents] = incoming;
 			++voice->eventCount;
 			return;
 		}
@@ -711,6 +774,7 @@ private:
 	std::atomic<std::int64_t> frameOffset_{0};
 	std::atomic<std::int64_t> renderedFrames_{0};
 	std::atomic<int> volume_{80};
+	bool testMode_ = false;
 	SDL_AudioDeviceID device_ = 0;
 	double attackFrames_ = kAttackSeconds * kDefaultSampleRate;
 	double releaseFrames_ = kReleaseSeconds * kDefaultSampleRate;
@@ -773,3 +837,20 @@ void AudioSystem::stopPlayback() { Engine::instance().stopPlayback(); }
 void AudioSystem::flushPlayback() { Engine::instance().stopPlayback(); }
 
 }  // namespace gea::platform::audio
+
+#ifdef GEA_SAILFISH_AUDIO_TEST
+namespace gea::sailfish::audio_test {
+
+void resetForTest(double sampleRate)
+{
+	auto &eng = gea::platform::audio::Engine::instance();
+	eng.resetForTest(sampleRate);
+}
+
+void renderForTest(float *interleaved, std::size_t frameCount)
+{
+	gea::platform::audio::Engine::instance().renderForTest(interleaved, frameCount);
+}
+
+}  // namespace gea::sailfish::audio_test
+#endif

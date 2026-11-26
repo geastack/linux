@@ -48,6 +48,13 @@
 
 namespace {
 
+using NativePixel = gea::framework::graphics::pixel::native_t;
+#if GEA_EMBEDDED_PIXEL_FORMAT == GEA_PIXEL_RGBA8888
+constexpr Uint32 kSdlPixelFormat = SDL_PIXELFORMAT_ABGR8888;
+#else
+constexpr Uint32 kSdlPixelFormat = SDL_PIXELFORMAT_RGB565;
+#endif
+
 int env_int(const char *name, int fallback, int lo, int hi)
 {
 	const char *v = std::getenv(name);
@@ -62,7 +69,7 @@ int g_canvas_height = env_int("GEA_SAILFISH_HEIGHT", gea::platform::display::kHe
 int g_window_scale = env_int("GEA_SAILFISH_SCALE", 1, 1, 8);
 
 gea::framework::graphics::Canvas g_canvas;
-uint16_t *g_framebuffer = nullptr;
+NativePixel *g_framebuffer = nullptr;
 size_t g_framebuffer_pixels = 0;
 
 SDL_Window *g_window = nullptr;
@@ -73,10 +80,10 @@ bool g_vsync_waited = false;
 
 // Static-backdrop cache (see gea_backdrop_cache below). Globals so
 // sailfish_display_resize can grow it when the logical canvas grows.
-uint16_t *g_backdrop_buffer = nullptr;
+NativePixel *g_backdrop_buffer = nullptr;
 int g_backdrop_cap = 0;
 
-std::vector<uint16_t> g_stream_rows;
+std::vector<NativePixel> g_stream_rows;
 
 int g_brightness = 100;
 uint8_t g_alpha_global = 255;
@@ -87,7 +94,7 @@ void ensure_canvas()
 {
 	if (g_framebuffer) return;
 	const size_t pixels = (size_t)g_canvas_width * (size_t)g_canvas_height;
-	uint16_t *fb = static_cast<uint16_t *>(std::calloc(pixels, sizeof(uint16_t)));
+	NativePixel *fb = static_cast<NativePixel *>(std::calloc(pixels, sizeof(NativePixel)));
 	if (!fb) {
 		std::fprintf(stderr, "[sailfish display] framebuffer allocation failed (%dx%d)\n",
 		             g_canvas_width, g_canvas_height);
@@ -152,7 +159,7 @@ void ensure_window()
 			const int h = std::clamp(output_h / g_window_scale, 64, 4096);
 			if (w != g_canvas_width || h != g_canvas_height) {
 				const size_t pixels = (size_t)w * (size_t)h;
-				uint16_t *fb = static_cast<uint16_t *>(std::calloc(pixels, sizeof(uint16_t)));
+				NativePixel *fb = static_cast<NativePixel *>(std::calloc(pixels, sizeof(NativePixel)));
 				if (fb) {
 					std::free(g_framebuffer);
 					g_framebuffer = fb;
@@ -171,7 +178,7 @@ void ensure_window()
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 	SDL_RenderSetLogicalSize(g_renderer, g_canvas_width, g_canvas_height);
 	SDL_RenderSetIntegerScale(g_renderer, SDL_TRUE);
-	g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_RGB565,
+	g_texture = SDL_CreateTexture(g_renderer, kSdlPixelFormat,
 	                              SDL_TEXTUREACCESS_STREAMING,
 	                              g_canvas_width, g_canvas_height);
 	if (!g_texture) {
@@ -199,8 +206,8 @@ void upload_rect(int x0, int y0, int x1, int y1)
 	y1 = std::min(g_canvas_height - 1, y1);
 	if (x0 > x1 || y0 > y1) return;
 	SDL_Rect rect{x0, y0, x1 - x0 + 1, y1 - y0 + 1};
-	const uint16_t *src = g_framebuffer + (size_t)y0 * g_canvas_width + x0;
-	SDL_UpdateTexture(g_texture, &rect, src, g_canvas_width * (int)sizeof(uint16_t));
+	const NativePixel *src = g_framebuffer + (size_t)y0 * g_canvas_width + x0;
+	SDL_UpdateTexture(g_texture, &rect, src, g_canvas_width * (int)sizeof(NativePixel));
 }
 
 // The texture holds the complete current frame (updated per dirty rect), so a
@@ -214,9 +221,9 @@ void present_texture()
 	g_vsync_waited = true;
 }
 
-// Copy a block of RGB565 rows into the software canvas (used by streamRect so
+// Copy a block of framebuffer rows into the software canvas (used by streamRect so
 // g_framebuffer stays the complete current frame for the next full upload).
-void copy_rgb565_rows_to_canvas(const uint16_t *pixels, int x, int y, int width, int rows)
+void copy_rows_to_canvas(const NativePixel *pixels, int x, int y, int width, int rows)
 {
 	if (!pixels || !g_framebuffer || width <= 0 || rows <= 0) return;
 	for (int row = 0; row < rows; row++) {
@@ -230,7 +237,7 @@ void copy_rgb565_rows_to_canvas(const uint16_t *pixels, int x, int y, int width,
 		if (run <= 0) continue;
 		std::memcpy(g_framebuffer + (size_t)dstY * g_canvas_width + dstX,
 		            pixels + (size_t)row * width + srcOffset,
-		            (size_t)run * sizeof(uint16_t));
+		            (size_t)run * sizeof(NativePixel));
 	}
 }
 
@@ -251,13 +258,13 @@ extern "C" int sailfish_display_consume_vsync_wait()
 // Full-screen scratch for the renderer's static-backdrop cache (see
 // DisplayList::maybeBakeStaticBackdrop and the geaos_display.cpp comment: the
 // weak nullptr default makes dirty-region replay erase static content painted
-// before an animated subtree). Desktop RAM is plentiful; one RGB565 canvas.
+// before an animated subtree). Desktop RAM is plentiful; one additional framebuffer.
 // Grown by sailfish_display_resize when the logical canvas outgrows it.
-extern "C" std::uint16_t *gea_backdrop_cache(int *cap_px)
+extern "C" NativePixel *gea_backdrop_cache(int *cap_px)
 {
 	if (!g_backdrop_buffer && g_canvas_width > 0 && g_canvas_height > 0) {
 		g_backdrop_cap = g_canvas_width * g_canvas_height;
-		g_backdrop_buffer = static_cast<std::uint16_t *>(std::malloc((size_t)g_backdrop_cap * sizeof(std::uint16_t)));
+		g_backdrop_buffer = static_cast<NativePixel *>(std::malloc((size_t)g_backdrop_cap * sizeof(NativePixel)));
 		if (!g_backdrop_buffer) g_backdrop_cap = 0;
 	}
 	if (cap_px) *cap_px = g_backdrop_buffer ? g_backdrop_cap : 0;
@@ -327,11 +334,11 @@ extern "C" int sailfish_display_resize(int new_width, int new_height)
 	if (new_width == g_canvas_width && new_height == g_canvas_height) return 0;
 
 	const size_t pixels = (size_t)new_width * (size_t)new_height;
-	uint16_t *fb = static_cast<uint16_t *>(std::calloc(pixels, sizeof(uint16_t)));
+	NativePixel *fb = static_cast<NativePixel *>(std::calloc(pixels, sizeof(NativePixel)));
 	if (!fb) return 0;
 
 	if (g_sdl_ok) {
-		SDL_Texture *texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_RGB565,
+		SDL_Texture *texture = SDL_CreateTexture(g_renderer, kSdlPixelFormat,
 		                                         SDL_TEXTUREACCESS_STREAMING,
 		                                         new_width, new_height);
 		if (!texture) {
@@ -349,11 +356,14 @@ extern "C" int sailfish_display_resize(int new_width, int new_height)
 	g_canvas_width = new_width;
 	g_canvas_height = new_height;
 	g_canvas.bindPixels(g_framebuffer, g_canvas_width, g_canvas_height);
-	if (g_sdl_ok) SDL_RenderSetLogicalSize(g_renderer, g_canvas_width, g_canvas_height);
+	if (g_sdl_ok) {
+		SDL_RenderSetLogicalSize(g_renderer, g_canvas_width, g_canvas_height);
+		SDL_RenderSetIntegerScale(g_renderer, SDL_TRUE);
+	}
 
 	const int cap = new_width * new_height;
 	if (g_backdrop_buffer && cap > g_backdrop_cap) {
-		uint16_t *grown = static_cast<uint16_t *>(std::realloc(g_backdrop_buffer, (size_t)cap * sizeof(uint16_t)));
+		NativePixel *grown = static_cast<NativePixel *>(std::realloc(g_backdrop_buffer, (size_t)cap * sizeof(NativePixel)));
 		if (grown) {
 			g_backdrop_buffer = grown;
 			g_backdrop_cap = cap;
@@ -388,7 +398,7 @@ void Display::clear()
 {
 	ensure_canvas();
 	if (!g_framebuffer) return;
-	std::memset(g_framebuffer, 0, g_framebuffer_pixels * sizeof(uint16_t));
+	std::memset(g_framebuffer, 0, g_framebuffer_pixels * sizeof(NativePixel));
 	flush();
 }
 
@@ -396,7 +406,7 @@ void Display::clearNoFlush()
 {
 	ensure_canvas();
 	if (!g_framebuffer) return;
-	std::memset(g_framebuffer, 0, g_framebuffer_pixels * sizeof(uint16_t));
+	std::memset(g_framebuffer, 0, g_framebuffer_pixels * sizeof(NativePixel));
 }
 
 void Display::print(const char *) {}
@@ -439,7 +449,7 @@ bool Display::streamRect(int x, int y, int w, int h, DisplayStreamRasterFn raste
 		int rows = maxRows;
 		if (row + rows > y1 + 1) rows = y1 - row + 1;
 		raster(g_stream_rows.data(), width, rows, x0, row, user);
-		copy_rgb565_rows_to_canvas(g_stream_rows.data(), x0, row, width, rows);
+		copy_rows_to_canvas(g_stream_rows.data(), x0, row, width, rows);
 	}
 	upload_rect(x0, y0, x1, y1);
 	present_texture();
@@ -492,39 +502,44 @@ void Display::clip(int *x0, int *y0, int *x1, int *y1)
 	if (y1) *y1 = g_canvas_height - 1;
 }
 
-void Display::fillRect(int x, int y, int w, int h, uint16_t color) { ensure_canvas(); g_canvas.fillRect(x, y, w, h, color); }
+void Display::fillRect(int x, int y, int w, int h, NativePixel color) { ensure_canvas(); g_canvas.fillRect(x, y, w, h, color); }
 void Display::scrollRect(int x, int y, int w, int h, int dx, int dy) { ensure_canvas(); g_canvas.scrollRect(x, y, w, h, dx, dy); }
 void Display::resetScrollRegion() {}
-void Display::strokeRect(int x, int y, int w, int h, uint16_t color) { ensure_canvas(); g_canvas.strokeRect(x, y, w, h, color); }
-void Display::fillCircle(int x, int y, int r, uint16_t color) { ensure_canvas(); g_canvas.fillCircle(x, y, r, color); }
-void Display::strokeCircle(int x, int y, int r, uint16_t color) { ensure_canvas(); g_canvas.strokeCircle(x, y, r, color); }
-void Display::drawLine(int x0, int y0, int x1, int y1, uint16_t color) { ensure_canvas(); g_canvas.drawLine(x0, y0, x1, y1, color); }
-void Display::drawArc(int cx, int cy, int r, int s, int e, uint16_t color) { ensure_canvas(); g_canvas.drawArc(cx, cy, r, s, e, color); }
-void Display::fillTriangle(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color) { ensure_canvas(); g_canvas.fillTriangle(x0, y0, x1, y1, x2, y2, color); }
-void Display::drawText(const char *text, int x, int y, uint16_t color, float scale)
+void Display::strokeRect(int x, int y, int w, int h, NativePixel color) { ensure_canvas(); g_canvas.strokeRect(x, y, w, h, color); }
+void Display::fillCircle(int x, int y, int r, NativePixel color) { ensure_canvas(); g_canvas.fillCircle(x, y, r, color); }
+void Display::strokeCircle(int x, int y, int r, NativePixel color) { ensure_canvas(); g_canvas.strokeCircle(x, y, r, color); }
+void Display::drawLine(int x0, int y0, int x1, int y1, NativePixel color) { ensure_canvas(); g_canvas.drawLine(x0, y0, x1, y1, color); }
+void Display::drawArc(int cx, int cy, int r, int s, int e, NativePixel color) { ensure_canvas(); g_canvas.drawArc(cx, cy, r, s, e, color); }
+void Display::fillTriangle(int x0, int y0, int x1, int y1, int x2, int y2, NativePixel color) { ensure_canvas(); g_canvas.fillTriangle(x0, y0, x1, y1, x2, y2, color); }
+void Display::drawText(const char *text, int x, int y, NativePixel color, float scale)
 {
 	ensure_canvas();
 	g_canvas.drawText(text, x, y, color, scale);
 }
-void Display::drawTextFont(const char *text, int x, int y, uint16_t color, int font_id)
+void Display::drawTextFont(const char *text, int x, int y, NativePixel color, int font_id)
 {
 	ensure_canvas();
 	g_canvas.drawTextFont(text, x, y, color, font_id);
 }
-void Display::drawTextFontFamily(const char *text, int x, int y, uint16_t color, int family_id, int size_px)
+void Display::drawTextFontFamily(const char *text, int x, int y, NativePixel color, int family_id, int size_px)
 {
 	ensure_canvas();
 	g_canvas.drawTextFontFamily(text, x, y, color, family_id, size_px);
 }
-void Display::setPixel(int x, int y, uint16_t color) { ensure_canvas(); g_canvas.fillRect(x, y, 1, 1, color); }
-void Display::fillRoundedRect(int x, int y, int w, int h, int tl, int tr, int br, int bl, uint16_t color) { ensure_canvas(); g_canvas.fillRoundedRect(x, y, w, h, tl, tr, br, bl, color); }
+void Display::drawTextFontFamily(const char *text, int x, int y, NativePixel color, int family, int size, int weight, int stretch)
+{
+	ensure_canvas();
+	g_canvas.drawTextFontFamily(text, x, y, color, family, size, weight, stretch);
+}
+void Display::setPixel(int x, int y, NativePixel color) { ensure_canvas(); g_canvas.fillRect(x, y, 1, 1, color); }
+void Display::fillRoundedRect(int x, int y, int w, int h, int tl, int tr, int br, int bl, NativePixel color) { ensure_canvas(); g_canvas.fillRoundedRect(x, y, w, h, tl, tr, br, bl, color); }
 void Display::fillRoundedRectBoxesRgb565(const int16_t *xs, const int16_t *ys, int count, int w, int h,
-                                         int tl, int tr, int br, int bl, const uint16_t *colors)
+                                         int tl, int tr, int br, int bl, const NativePixel *colors)
 {
 	ensure_canvas();
 	g_canvas.fillRoundedRectBoxesRgb565(xs, ys, count, w, h, tl, tr, br, bl, colors);
 }
-void Display::strokeRoundedRect(int x, int y, int w, int h, int tl, int tr, int br, int bl, int lw, uint16_t color)
+void Display::strokeRoundedRect(int x, int y, int w, int h, int tl, int tr, int br, int bl, int lw, NativePixel color)
 {
 	ensure_canvas();
 	g_canvas.strokeRoundedRect(x, y, w, h, tl, tr, br, bl, lw, color);

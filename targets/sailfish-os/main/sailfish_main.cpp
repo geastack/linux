@@ -46,6 +46,7 @@
 // Shared with Raspberry Pi OS: SDL key/text events with key/code/modifier
 // metadata, UTF-8 text and whole-code-point Backspace for focused inputs.
 #include "rpios_keyboard.h"
+#include "sailfish_dpr.h"
 #include "sailfish_keyboard.h"
 
 #include <SDL2/SDL.h>
@@ -75,8 +76,6 @@ extern "C" int sailfish_display_panel_short_side();
 extern "C" bool sailfish_display_keyboard_focus();
 extern "C" int sailfish_display_resize(int new_width, int new_height);
 extern "C" int gea_embedded_apps_launch(const char *app_id);
-extern "C" void sailfish_runtime_storage_load();
-extern "C" void sailfish_runtime_storage_flush();
 extern "C" void sailfish_install_wifi_driver();
 
 namespace gea::sailfish {
@@ -93,35 +92,20 @@ namespace {
 // "auto" (the default on ARM phone builds, see config.mjs sailfishDensity).
 double devicePixelRatio()
 {
-	const char *v = std::getenv("GEA_SAILFISH_DPR");
-	if (v && *v) {
-		if (std::strcmp(v, "auto") == 0) return 0.0;
-		const double dpr = std::atof(v);
-		if (dpr >= 0.5 && dpr <= 8.0) return dpr;
-	}
-	return GEA_SAILFISH_DEFAULT_DPR;
+	return gea::sailfish::parseEnvDpr(std::getenv("GEA_SAILFISH_DPR"), GEA_SAILFISH_DEFAULT_DPR);
 }
-
-// CSS width an "auto" DPR keeps at least: the common phone layout width.
-constexpr int kAutoCssShortSide = 360;
 
 // The DPR handed to the framework. An explicit app DPR is multiplied by the
 // output scale (the canvas is in physical pixels, see sailfish_display.cpp).
 // "auto" is pixel-perfect: the largest integer that keeps the panel's short
-// side at least 360 CSS pixels wide, so every CSS pixel is a whole N x N block
-// of canvas pixels and edges never land between panel pixels. Every current
-// Sailfish phone is 720 or 1080 pixels wide: Jolla C2 (720x1600) gets 2 and a
-// 360x800 viewport; Xperia XA2 family (1080x1920), Xperia 10 through 10 V
-// (1080x2520) and Jolla Phone (1080x2340) get 3 and 360 CSS pixels across.
-// It is derived from the panel, not the window, so the on-screen keyboard
-// opening does not change the density.
+// side at least 360 CSS pixels wide (see sailfish_dpr.h).
 double effectiveDevicePixelRatio()
 {
-	const double app = devicePixelRatio();
-	if (app > 0.0) return app * sailfish_display_output_ratio();
-	const int scale = std::max(1, sailfish_display_window_scale());
-	const int shortSide = sailfish_display_panel_short_side() / scale;
-	return (double)std::max(1, shortSide / kAutoCssShortSide);
+	return gea::sailfish::effectiveDevicePixelRatio(
+		devicePixelRatio(),
+		sailfish_display_output_ratio(),
+		sailfish_display_window_scale(),
+		sailfish_display_panel_short_side());
 }
 
 // Drive CSS animations each frame. Like geaos, this target runs its own loop
@@ -261,6 +245,7 @@ void setPaused(bool paused)
 	if (g_paused == paused) return;
 	g_paused = paused;
 	gea::framework::events::TouchRuntime::setDispatchEnabled(!paused);
+	if (paused) sailfish_keyboard_update(-1, false);
 	if (!paused) sailfish_display_present();  // pixels may be stale after unminimize
 }
 
@@ -344,6 +329,9 @@ void pumpSdlEvents()
 			g_keyboard.accept(event);
 			if (event.window.windowID != sailfish_display_window_id()) break;
 			switch (event.window.event) {
+			case SDL_WINDOWEVENT_CLOSE:
+				g_stop = 1;
+				break;
 			case SDL_WINDOWEVENT_SIZE_CHANGED:
 				g_resize_pending = true;
 				g_resize_window_w = event.window.data1;
@@ -437,6 +425,13 @@ int main(int argc, char **argv)
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	setvbuf(stderr, nullptr, _IOLBF, 0);
 
+	// Set Sailfish PulseAudio role metadata in the single-threaded startup phase
+	// before SDL, libcurl, or worker threads begin reading the environment.
+	setenv("PULSE_PROP_media.role", "x-maemo", 0);
+#ifdef GEA_SAILFISH_APP_TITLE
+	setenv("PULSE_PROP_application.name", GEA_SAILFISH_APP_TITLE, 0);
+#endif
+
 	signal(SIGTERM, on_sigterm);
 	signal(SIGINT,  on_sigterm);
 	{
@@ -474,13 +469,9 @@ int main(int argc, char **argv)
 	// Report the desktop's real link state — apps gate remote fetches on it.
 	sailfish_install_wifi_driver();
 
-	// Restore persisted localStorage BEFORE Application::init — app store
-	// init() reads localStorage during mount. Two views share the blob file:
-	// the geatsc runtime's host storage (what generated apps actually use;
-	// synced by sailfish_storage_bridge.cpp) and the native StorageFacade
-	// (mirrors runtime.cpp's boot-time Storage.load()).
+	// The current compiler binds localStorage to the shared StorageFacade.
+	// Restore it before app top-level/mount; flush only its dirty state per frame.
 	gea::framework::services::StorageService::init();
-	sailfish_runtime_storage_load();
 	gea::host::Storage.load();
 
 	gea::framework::app::Application::init(w, h, dpr);
@@ -564,9 +555,7 @@ int main(int argc, char **argv)
 			sailfish_keyboard_update(activeInput, inputType && std::strcmp(inputType, "password") == 0);
 		}
 		// Persist localStorage mutations from this frame (no-op unless changed;
-		// mirrors runtime.cpp's per-frame Storage.flushPending()). Both views:
-		// the geatsc runtime store (bridge) and the native facade.
-		sailfish_runtime_storage_flush();
+		// mirrors runtime.cpp's per-frame Storage.flushPending()).
 		gea::host::Storage.flushPending();
 		struct timespec t_af1;
 		clock_gettime(CLOCK_MONOTONIC, &t_af1);

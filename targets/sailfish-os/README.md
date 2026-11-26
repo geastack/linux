@@ -51,7 +51,7 @@ dependencies go in `gea.sailfish`:
 | --- | --- |
 | `nativeIncludeDirectories` | App-relative directories added to the include path |
 | `nativeSystemLibraries` | Library names linked with `-l`, such as `util` for `openpty` |
-| `pkgConfigModules` | pkg-config modules, such as `maliit-glib`; each one is also a `BuildRequires` |
+| `pkgConfigModules` | pkg-config modules, such as `zlib`; each one is also a `BuildRequires` |
 
 Paths must stay inside the app directory.
 
@@ -91,7 +91,7 @@ other key; the app quits on the window close request or SIGTERM. Text from
 `SDL_TEXTINPUT` is inserted into the focused input as UTF-8, and Backspace
 removes one whole character. F11 toggles fullscreen.
 
-The Sailfish on-screen keyboard (Maliit, through `maliit-glib`) opens while an
+The Sailfish on-screen keyboard (Maliit, over Harbour-allowed `gio-2.0` `GDBus`) opens while an
 input is focused and closes when focus leaves it; `type="password"` inputs ask
 for hidden text. Committed text and special keys (Backspace, Enter, Tab,
 arrows, Home/End, Delete, Escape) are delivered as SDL events, so they reach the
@@ -140,3 +140,38 @@ the ASCII-only rasterizer does not provide those glyphs.
 
 The target has been run on the Sailfish OS 5.1.0.11 emulator (i486); it has not
 been tested on a physical device.
+
+## Audio backend
+
+`sailfish_audio.cpp` implements `gea::platform::audio` using SDL2 audio
+(PulseAudio on Sailfish OS) with a lock-free command queue and 64-voice
+oscillator mixer (`Sine`, `Square`, `Sawtooth`, `Triangle`), attack/release
+ramps, `setValueAtTime` scheduling, one-shot PCM (`playPcm`), and WAV playback
+(`playFile`). `main()` sets `PULSE_PROP_media.role=x-maemo` and
+`PULSE_PROP_application.name` (when unset) before spawning threads so Sailfish
+hardware volume buttons control the stream.
+
+Runtime audio environment knobs:
+
+- `GEA_AUDIO_DISABLED=1`: skips opening an SDL audio device and falls back to a
+  monotonic steady clock.
+- `GEA_AUDIO_DEBUG=1`: logs the opened audio driver, sample rate, channels, and
+  buffer size on stderr.
+
+## Verification and Harbour QA
+
+Host/container automated checks (no Sailfish SDK required):
+
+```sh
+npm test                                      # config & prepare.mjs staging suites
+bash targets/sailfish-os/test/run-native-tests.sh  # C++ ASan+UBSan platform tests
+```
+
+Docker `sfdk` build, Jolla Harbour RPM validation (`sfdk check`), and physical
+`aarch64` device verification:
+
+```sh
+bash targets/sailfish-os/test/verify-harbour-rpm.sh targets/sailfish-os/test/probe-app --arch aarch64
+# With device install & checks:
+bash targets/sailfish-os/test/verify-harbour-rpm.sh targets/sailfish-os/test/probe-app --arch aarch64 --device defaultuser@<phone-ip>
+```

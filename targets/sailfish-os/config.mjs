@@ -114,6 +114,6 @@ export function desktopEntry(config) {
 }
 
 export function rpmSpec(config) {
-  const buildRequires = [...new Set(['cmake', 'pkgconfig(sdl2)', 'pkgconfig(libcurl)', 'pkgconfig(maliit-glib)', ...config.pkgConfigModules.map((name) => `pkgconfig(${name})`)])]
+  const buildRequires = [...new Set(['cmake', 'pkgconfig(sdl2)', 'pkgconfig(libcurl)', 'pkgconfig(gio-2.0)', ...config.pkgConfigModules.map((name) => `pkgconfig(${name})`)])]
   return `Name: ${config.packageName}\nVersion: ${config.rpmVersion}\nRelease: 1\nSummary: Gea ${config.appName} for Sailfish OS\nLicense: ${config.rpmLicense}\n${buildRequires.map((item) => `BuildRequires: ${item}\n`).join('')}\n%description\nGea JSX application for Sailfish OS.\n\n%build\n%cmake .\n%make_build\n\n%install\n%make_install\n\n%files\n%{_bindir}/${config.packageName}\n%{_datadir}/applications/${config.packageName}.desktop\n%{_datadir}/icons/hicolor/*/apps/${config.packageName}.png\n`
 }
