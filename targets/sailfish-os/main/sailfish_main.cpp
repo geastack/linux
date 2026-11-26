@@ -48,6 +48,7 @@
 #include "rpios_keyboard.h"
 #include "sailfish_dpr.h"
 #include "sailfish_keyboard.h"
+#include "sailfish_touch.h"
 
 #include <SDL2/SDL.h>
 
@@ -149,45 +150,26 @@ void injectMouse(gea::platform::touch::Phase phase, bool touching, int x, int y)
 }
 
 // ---- multi-touch (real touchscreens) --------------------------------------
-// SDL fingers → TouchRuntime::queueTouchEvent with a stable pointer id.
-// injectEvent can't be used here: it feeds only the primary pointer. Pointer 0
-// is shared with the mouse — a touchscreen tap and a left-click behave
-// identically (SDL's touch→mouse synthesis is disabled in sailfish_display.cpp,
-// so a finger never arrives twice).
+// Primary finger (pointer 0) goes through Touchscreen::injectEvent so
+// sailfish_sensors' latest-move cache stays fresh for TouchRuntime's
+// consumeLatestMove() — bypassing it leaves the cache at (0,0) and breaks
+// touch drags/scrolling. Secondary fingers (pointerId >= 1) go directly to
+// TouchRuntime::queueTouchEvent so they never clobber the primary cache.
+// Pointer 0 is shared with the mouse (SDL's touch→mouse synthesis is disabled
+// in sailfish_display.cpp, so a finger never arrives twice).
 
-constexpr int kMaxFingers = 10;
-SDL_FingerID g_finger_ids[kMaxFingers];
-bool g_finger_used[kMaxFingers] = {};
-
-int fingerSlot(SDL_FingerID id, bool allocate)
-{
-	for (int i = 0; i < kMaxFingers; i++)
-		if (g_finger_used[i] && g_finger_ids[i] == id) return i;
-	if (!allocate) return -1;
-	for (int i = 0; i < kMaxFingers; i++) {
-		if (!g_finger_used[i]) {
-			g_finger_used[i] = true;
-			g_finger_ids[i] = id;
-			return i;
-		}
-	}
-	return -1;
-}
+gea::sailfish::touch::FingerSlots g_fingers;
 
 void injectFinger(gea::platform::touch::Phase phase, bool touching, float nx, float ny, int pointerId)
 {
 	// SDL_RenderSetLogicalSize's event watch already normalizes finger events
 	// to the logical viewport, including letterbox offsets. Scale only once.
-	int x = (int)(nx * (float)sailfish_canvas_width());
-	int y = (int)(ny * (float)sailfish_canvas_height());
-	const int maxX = sailfish_canvas_width() - 1;
-	const int maxY = sailfish_canvas_height() - 1;
-	if (x < 0) x = 0;
-	if (y < 0) y = 0;
-	if (x > maxX) x = maxX;
-	if (y > maxY) y = maxY;
-	gea::framework::events::TouchRuntime::queueTouchEvent(
-	    static_cast<gea::framework::events::TouchPhase>(phase), touching, x, y, pointerId);
+	gea::sailfish::touch::routeFinger(
+	    phase, touching, nx, ny, sailfish_canvas_width(), sailfish_canvas_height(), pointerId,
+	    [](gea::platform::touch::Phase p, bool t, int x, int y, int id) {
+		    gea::framework::events::TouchRuntime::queueTouchEvent(
+		        static_cast<gea::framework::events::TouchPhase>(p), t, x, y, id);
+	    });
 }
 
 // ---- keyboard --------------------------------------------------------------
@@ -308,20 +290,20 @@ void pumpSdlEvents()
 			}
 			break;
 		case SDL_FINGERDOWN: {
-			const int slot = fingerSlot(event.tfinger.fingerId, true);
+			const int slot = g_fingers.slot(event.tfinger.fingerId, true);
 			if (slot >= 0) injectFinger(Phase::Down, true, event.tfinger.x, event.tfinger.y, slot);
 			break;
 		}
 		case SDL_FINGERMOTION: {
-			const int slot = fingerSlot(event.tfinger.fingerId, false);
+			const int slot = g_fingers.slot(event.tfinger.fingerId, false);
 			if (slot >= 0) injectFinger(Phase::Move, true, event.tfinger.x, event.tfinger.y, slot);
 			break;
 		}
 		case SDL_FINGERUP: {
-			const int slot = fingerSlot(event.tfinger.fingerId, false);
+			const int slot = g_fingers.slot(event.tfinger.fingerId, false);
 			if (slot >= 0) {
 				injectFinger(Phase::Up, false, event.tfinger.x, event.tfinger.y, slot);
-				g_finger_used[slot] = false;
+				g_fingers.release(slot);
 			}
 			break;
 		}
