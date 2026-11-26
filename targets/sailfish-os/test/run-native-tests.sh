@@ -128,21 +128,25 @@ COMMON_FLAGS=(
 # Intentional singletons (Engine::instance) are not freed at process exit.
 export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}detect_leaks=0"
 
-echo "==> [1/6] dpr.test"
+echo "==> [1/7] dpr.test"
 "$CXX" "${COMMON_FLAGS[@]}" "$HERE/dpr.test.cpp" -o "$TMP_DIR/dpr.test"
 "$TMP_DIR/dpr.test"
 
-echo "==> [2/6] keyboard_maliit.test"
+echo "==> [2/7] keyboard_maliit.test"
 "$CXX" "${COMMON_FLAGS[@]}" "${SDL_CFLAGS[@]}" "$HERE/keyboard_maliit.test.cpp" -o "$TMP_DIR/keyboard_maliit.test"
 "$TMP_DIR/keyboard_maliit.test"
 
-echo "==> [3/6] touch.test"
+echo "==> [3/7] touch.test"
 "$CXX" "${COMMON_FLAGS[@]}" "${SDL_CFLAGS[@]}" \
   "$HERE/touch.test.cpp" "$TARGET_DIR/main/sailfish_sensors.cpp" -pthread \
   -o "$TMP_DIR/touch.test"
 "$TMP_DIR/touch.test"
 
-echo "==> [4/6] storage.test"
+echo "==> [4/7] fonts.test"
+"$CXX" "${COMMON_FLAGS[@]}" "$HERE/fonts.test.cpp" -o "$TMP_DIR/fonts.test"
+"$TMP_DIR/fonts.test"
+
+echo "==> [5/7] storage.test"
 "$CXX" "${COMMON_FLAGS[@]}" \
   -DGEA_SAILFISH_ORGANIZATION_NAME=\"org.geastack\" \
   -DGEA_SAILFISH_APPLICATION_NAME=\"probe_app\" \
@@ -150,14 +154,14 @@ echo "==> [4/6] storage.test"
   -o "$TMP_DIR/storage.test"
 "$TMP_DIR/storage.test"
 
-echo "==> [5/6] audio.test"
+echo "==> [6/7] audio.test"
 "$CXX" "${COMMON_FLAGS[@]}" "${SDL_CFLAGS[@]}" \
   -DGEA_SAILFISH_APP_TITLE=\"SailfishProbe\" \
   "$HERE/audio.test.cpp" "${SDL_LIBS[@]}" -pthread \
   -o "$TMP_DIR/audio.test"
 "$TMP_DIR/audio.test"
 
-echo "==> [6/6] network.test"
+echo "==> [7/7] network.test"
 PORT_FILE="$TMP_DIR/http-port"
 node -e '
 const http = require("node:http");
@@ -213,4 +217,4 @@ fi
   -o "$TMP_DIR/network.test"
 TEST_HTTP_URL="$TEST_HTTP_URL" "$TMP_DIR/network.test"
 
-echo "ALL 6 NATIVE SAILFISH TESTS PASSED"
+echo "ALL 7 NATIVE SAILFISH TESTS PASSED"

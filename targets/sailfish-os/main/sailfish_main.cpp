@@ -47,6 +47,7 @@
 // metadata, UTF-8 text and whole-code-point Backspace for focused inputs.
 #include "rpios_keyboard.h"
 #include "sailfish_dpr.h"
+#include "sailfish_fonts.h"
 #include "sailfish_keyboard.h"
 #include "sailfish_touch.h"
 
@@ -384,6 +385,8 @@ void geaRetireNativeProcess() noexcept {
  retired = true;
  try { sailfish_keyboard_shutdown(); }
  catch (...) { std::fputs("Gea: Maliit keyboard retirement failed\n", stderr); }
+ try { gea::sailfish::fonts::shutdown(); }
+ catch (...) { std::fputs("Gea: system font retirement failed\n", stderr); }
  try { g_keyboard.shutdown(); }
  catch (...) { std::fputs("Gea: SDL keyboard retirement failed\n", stderr); }
  try { gea_native_application_terminate(); }
@@ -455,6 +458,10 @@ int main(int argc, char **argv)
 	// Restore it before app top-level/mount; flush only its dirty state per frame.
 	gea::framework::services::StorageService::init();
 	gea::host::Storage.load();
+
+	// Provide Sailfish system TTF fonts for generic CSS families (sans-serif,
+	// serif, monospace) while letting app-bundled @font-face take precedence.
+	gea::sailfish::fonts::install();
 
 	gea::framework::app::Application::init(w, h, dpr);
 	std::fprintf(stderr, "[sailfish] init returned\n");
