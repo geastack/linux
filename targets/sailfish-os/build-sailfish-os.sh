@@ -53,5 +53,5 @@ if [[ "$SFDK_BIN" == */* ]]; then
 fi
 command -v "$SFDK_BIN" >/dev/null || { echo "sfdk not found: $SFDK_BIN" >&2; exit 1; }
 APP_ID="$(node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(p.gea.id)' "$APP_DIR/package.json")"
-PROJECT_DIR="$TARGET_DIR/build/$APP_ID-$ARCH/project"
+PROJECT_DIR="$APP_DIR/.gea-sailfish/build/$APP_ID-$ARCH/project"
 (cd "$PROJECT_DIR" && "$SFDK_BIN" -c "target=SailfishOS-5.1.0.11-$ARCH" build)

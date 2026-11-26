@@ -1,0 +1,26 @@
+{
+  "name": "sailfish-probe",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "gea": {
+    "id": "sailfish-probe",
+    "name": "Sailfish Probe",
+    "entry": "index.tsx",
+    "icons": {
+      "256": "icon.png"
+    },
+    "targets": {
+      "sailfish-os": true
+    },
+    "sailfish": {
+      "organizationName": "org.geastack",
+      "applicationName": "sailfish_probe",
+      "permissions": [
+        "Audio",
+        "Internet"
+      ],
+      "devicePixelRatio": "auto"
+    }
+  }
+}
